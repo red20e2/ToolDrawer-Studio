@@ -52,6 +52,8 @@ Features:
 
 - Windows desktop application.
 - Import JPG, PNG, and other formats supported by the image stack.
+- Webcam capture.
+- Phone-to-PC photo capture through a QR-code local-network upload page.
 - A4 and Letter calibration.
 - Printable calibration target support.
 - Two-point known-distance calibration for ruler/caliper workflows.
@@ -62,6 +64,7 @@ Features:
 - Per-tool manual contour editing.
 - Clearance/offset controls.
 - Manual thickness/depth entry.
+- Side-view image measurement for thickness estimation, with manual override.
 - Drawer/tray/bin dimensions.
 - Automatic layout plus manual editing.
 - Standard Gridfinity generation.
@@ -75,18 +78,18 @@ Features:
 - Reusable local tool library.
 - STL, 3MF, STEP, DXF, SVG, and 1:1 PDF export where applicable.
 - One-click open/handoff to OrcaSlicer and FreeCAD when installed.
+- Configurable handoff targets for common laser/CNC workflows.
 
-### V0.2 - Capture and Library Expansion
+### V0.2 - Workflow and Library Expansion
 
-- Webcam capture.
-- Phone-to-PC photo capture through a QR-code local-network upload page.
 - Enhanced saved-tool library metadata.
 - Duplicate/tool-template workflows.
-- Side-view image measurement for thickness estimation.
+- Capture presets and image-quality guidance.
+- Batch library operations.
 - Better stepped-depth editing.
 - Improved automatic packing.
 - Additional custom-shape tools.
-- More configurable direct handoff targets for laser/CNC software.
+- More advanced per-application laser/CNC launch profiles.
 
 ### V0.3 - Advanced Geometry
 
@@ -403,8 +406,27 @@ V0.1 integrations:
 - Detect FreeCAD executable.
 - Launch generated file in selected target.
 - Allow manually configured executable paths.
+- Allow user-defined laser/CNC executable targets with a preferred generated file type.
 
-Later versions may add laser/CNC-specific launch profiles, but generation/export must never depend on a specific third-party application.
+Generation/export must never depend on a specific third-party application.
+
+### 5.13 Thickness Measurement Service
+
+V0.1 supports both manual depth entry and calibrated side-view estimation.
+
+Inputs:
+
+- ToolObject.
+- Optional side-view image.
+- Calibration record for the side view.
+
+Outputs:
+
+- Estimated maximum thickness/depth.
+- Confidence indicator.
+- Manual override value.
+
+The side-view estimator is an assistive measurement. A manually entered value always takes precedence.
 
 ## 6. Native `.tds` Project Format
 
@@ -501,10 +523,12 @@ Internal geometry units remain millimetres regardless of display preference.
 
 - Open/save projects.
 - Image import.
+- Webcam capture.
 - Calibration.
 - Perspective correction.
 - Local tracing.
 - Manual refinement.
+- Side-view thickness estimation.
 - Tool library.
 - Layout optimization.
 - Gridfinity generation.
@@ -512,6 +536,7 @@ Internal geometry units remain millimetres regardless of display preference.
 - CAD/vector exports.
 - PDF verification sheets.
 - OrcaSlicer/FreeCAD launch.
+- Configured laser/CNC application handoff.
 - LAN phone transfer when PC and phone share a network.
 
 ### Optional online features
@@ -584,6 +609,7 @@ For manufacturing verification, the application generates a true-scale PDF or 2D
 - Packing constraints.
 - Project serialization/migrations.
 - Export parameter validation.
+- Side-view thickness conversion.
 
 ### Golden-image tests
 
@@ -626,8 +652,10 @@ For known ToolObjects:
 
 - Save/reopen project without geometry drift.
 - Offline startup.
+- Webcam capture without internet access.
 - Optional online feature failure while core operations continue.
 - OrcaSlicer/FreeCAD path detection.
+- Configured laser/CNC target launch.
 - Phone upload token expiry and rejection of invalid sessions.
 
 ## 12. Security and Privacy
@@ -728,22 +756,23 @@ The modules above are boundaries, not a requirement to create empty placeholder 
 A V0.1 build is acceptable when a user can, entirely offline:
 
 1. Create a project.
-2. Import a photograph containing multiple hand tools.
-3. Calibrate it using at least A4/Letter, a known distance, or the printable target.
-4. Correct perspective when applicable.
-5. Automatically obtain separate candidate outlines for multiple tools.
-6. Manually correct each outline.
-7. Assign names, depth, and clearance.
-8. Enter drawer/tray dimensions.
-9. Automatically arrange tools and manually adjust placement.
-10. Generate either a Gridfinity design or a multi-layer/single-layer foam design from the same ToolObjects.
-11. Add finger access and labels.
-12. Configure relevant Gridfinity or foam settings.
-13. Preview dimensions before export.
-14. Save and reopen the project without losing editability.
-15. Export manufacturing files at correct scale.
-16. Generate a 1:1 physical verification output.
-17. Open applicable output in OrcaSlicer or FreeCAD when configured.
+2. Import a photograph, capture one from a webcam, or receive one from a phone over the local network.
+3. Work with a photograph containing multiple hand tools.
+4. Calibrate it using at least A4/Letter, a known distance, a known-size object, or the printable target.
+5. Correct perspective when applicable.
+6. Automatically obtain separate candidate outlines for multiple tools.
+7. Manually correct each outline.
+8. Assign names, clearance, and depth using manual values or calibrated side-view estimation.
+9. Enter drawer/tray dimensions.
+10. Automatically arrange tools and manually adjust placement.
+11. Generate either a Gridfinity design or a multi-layer/single-layer foam design from the same ToolObjects.
+12. Add finger access and labels.
+13. Configure relevant Gridfinity or foam settings.
+14. Preview dimensions before export.
+15. Save and reopen the project without losing editability.
+16. Export manufacturing files at correct scale.
+17. Generate a 1:1 physical verification output.
+18. Open applicable output in OrcaSlicer, FreeCAD, or a configured laser/CNC application.
 
 No V0.1 acceptance criterion may require an internet connection, account, subscription, or paid API.
 
@@ -753,7 +782,7 @@ Implementation should begin with the smallest vertical slice that proves the arc
 
 `Import one image -> calibrate -> trace one/multiple silhouettes -> manually refine -> save ToolObject -> generate one valid parametric pocket -> export STEP/STL/DXF -> reopen project`
 
-Only after that slice is reliable should work expand into richer layout optimization, foam layering, capture methods, and advanced AI.
+Only after that slice is reliable should V0.1 expand into richer layout optimization, foam layering, the complete webcam/phone capture workflows, side-view thickness estimation, configurable integrations, and advanced local AI behavior.
 
 This reduces the chance of building a visually impressive application around geometry that cannot be trusted.
 
@@ -779,4 +808,4 @@ The approved product decisions are:
 
 ## 20. Spec Self-Review Checklist
 
-This specification intentionally contains no TBD/TODO placeholders for V0.1 behavior. The architecture separates capture, calibration, tracing, geometry, layout, generation, export, and persistence. Core features are consistently defined as offline-capable. Advanced reconstruction is explicitly deferred to V0.3 so it does not block a useful V0.1. Accuracy is treated as a measurable target with confidence warnings rather than as guaranteed metrology.
+This specification intentionally contains no TBD/TODO placeholders for V0.1 behavior. The architecture separates capture, calibration, tracing, geometry, thickness measurement, layout, generation, export, integration, and persistence. Core features are consistently defined as offline-capable. Webcam capture, LAN phone capture, side-view thickness estimation, and configurable CNC/laser handoff are explicitly included in V0.1 to match the approved requirements. Advanced multi-view 3D reconstruction is explicitly deferred to V0.3 so it does not block a useful V0.1. Accuracy is treated as a measurable target with confidence warnings rather than as guaranteed metrology.
