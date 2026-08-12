@@ -397,6 +397,9 @@ class MainWindow(QMainWindow):
             tool_id = self._measure_calibration_tool_id
             self._measure_calibration_tool_id = None
             self.controller.select_tool(tool_id)
+            self.controller.activate_capture(
+                self.controller.selected_tool().source_capture_id
+            )
             self._refresh_measure_state()
             self.tabs.setTabEnabled(2, True)
             self.tabs.setCurrentIndex(2)
@@ -668,7 +671,11 @@ class MainWindow(QMainWindow):
         except ValueError:
             return
         self.measure_panel.set_sources(
-            [(capture.id, capture.filename) for capture in self.controller.project.captures],
+            [
+                (capture.id, capture.filename)
+                for capture in self.controller.project.captures
+                if capture.id != tool.source_capture_id
+            ],
             [(item.id, item.filename) for item in self.capture_session.items()],
             selected_capture_id=tool.side_view_capture_id,
         )
@@ -755,6 +762,7 @@ class MainWindow(QMainWindow):
 
             tool = self.controller.selected_tool()
             self.controller.attach_side_view(tool.id, capture_id)
+            self.controller.activate_capture(tool.source_capture_id)
             self._measurement_warnings.pop(tool.id, None)
             self._refresh_measure_state()
         except Exception as exc:
