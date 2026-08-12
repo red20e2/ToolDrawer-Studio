@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from shapely.geometry.base import BaseGeometry
+
 from tooldrawer_studio.domain.models import Project, ToolObject
 from tooldrawer_studio.layout.geometry import (
-    candidate_exclusion_geometry,
+    boundary_exclusion_geometry,
+    grab_access_polygon,
+    oriented_cavity_polygon,
+    spacing_exclusion_polygon,
     usable_boundary_polygon,
 )
 from tooldrawer_studio.layout.models import LayoutState, ToolPlacement
@@ -25,6 +30,14 @@ class LayoutValidationResult:
     issues: tuple[LayoutIssue, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _PlacedGeometry:
+    tool_id: str
+    cavity: BaseGeometry
+    spacing: BaseGeometry
+    grab: BaseGeometry
+
+
 def _issue_sort_key(issue: LayoutIssue) -> tuple[str, tuple[str, ...], str]:
     return (issue.code, issue.tool_ids, issue.message)
 
@@ -33,16 +46,22 @@ def _tool_map(project: Project) -> dict[str, ToolObject]:
     return {tool.id: tool for tool in project.tools}
 
 
-def _placed_geometry(
-    tool: ToolObject,
-    placement: ToolPlacement,
-    layout: LayoutState,
-):
-    return candidate_exclusion_geometry(
-        tool,
-        placement,
-        spacing_mm=layout.spacing_mm,
-        default_grab_clearance_mm=layout.grab_clearance_mm,
+def _has_area_intersection(left: BaseGeometry, right: BaseGeometry) -> bool:
+    if left.is_empty or right.is_empty:
+        return False
+    intersection = left.intersection(right)
+    return (
+        not intersection.is_empty
+        and intersection.area > _INTERSECTION_AREA_TOLERANCE
+    )
+
+
+def _overlap_issue(left_id: str, right_id: str, reason: str) -> LayoutIssue:
+    tool_ids = tuple(sorted((left_id, right_id)))
+    return LayoutIssue(
+        code="overlap",
+        message=f"{reason}: {tool_ids[0]} / {tool_ids[1]}",
+        tool_ids=tool_ids,
     )
 
 
@@ -52,7 +71,7 @@ def validate_layout(project: Project, layout: LayoutState) -> LayoutValidationRe
     issues: list[LayoutIssue] = []
     tools_by_id = _tool_map(project)
     boundary = usable_boundary_polygon(layout)
-    placed: list[tuple[str, object]] = []
+    placed: list[_PlacedGeometry] = []
 
     for placement in layout.placements:
         tool = tools_by_id.get(placement.tool_id)
@@ -69,7 +88,22 @@ def validate_layout(project: Project, layout: LayoutState) -> LayoutValidationRe
             continue
 
         try:
-            exclusion = _placed_geometry(tool, placement, layout)
+            cavity = oriented_cavity_polygon(tool, placement)
+            spacing = spacing_exclusion_polygon(
+                tool,
+                placement,
+                layout.spacing_mm,
+            )
+            grab = grab_access_polygon(
+                tool,
+                placement,
+                layout.grab_clearance_mm,
+            )
+            boundary_geometry = boundary_exclusion_geometry(
+                tool,
+                placement,
+                layout.grab_clearance_mm,
+            )
         except ValueError as exc:
             issues.append(
                 LayoutIssue(
@@ -80,7 +114,7 @@ def validate_layout(project: Project, layout: LayoutState) -> LayoutValidationRe
             )
             continue
 
-        if not boundary.covers(exclusion):
+        if not boundary.covers(boundary_geometry):
             issues.append(
                 LayoutIssue(
                     code="boundary",
@@ -88,18 +122,35 @@ def validate_layout(project: Project, layout: LayoutState) -> LayoutValidationRe
                     tool_ids=(placement.tool_id,),
                 )
             )
-        placed.append((placement.tool_id, exclusion))
+        placed.append(
+            _PlacedGeometry(
+                tool_id=placement.tool_id,
+                cavity=cavity,
+                spacing=spacing,
+                grab=grab,
+            )
+        )
 
-    for index, (left_id, left_geometry) in enumerate(placed):
-        for right_id, right_geometry in placed[index + 1 :]:
-            intersection = left_geometry.intersection(right_geometry)
-            if not intersection.is_empty and intersection.area > _INTERSECTION_AREA_TOLERANCE:
-                tool_ids = tuple(sorted((left_id, right_id)))
+    for index, left in enumerate(placed):
+        for right in placed[index + 1 :]:
+            if _has_area_intersection(left.spacing, right.spacing):
                 issues.append(
-                    LayoutIssue(
-                        code="overlap",
-                        message=f"Required layout exclusion regions overlap: {tool_ids[0]} / {tool_ids[1]}",
-                        tool_ids=tool_ids,
+                    _overlap_issue(
+                        left.tool_id,
+                        right.tool_id,
+                        "Required cavity spacing is violated",
+                    )
+                )
+                continue
+            if _has_area_intersection(left.cavity, right.grab) or _has_area_intersection(
+                right.cavity,
+                left.grab,
+            ):
+                issues.append(
+                    _overlap_issue(
+                        left.tool_id,
+                        right.tool_id,
+                        "Required grab access is obstructed",
                     )
                 )
 
