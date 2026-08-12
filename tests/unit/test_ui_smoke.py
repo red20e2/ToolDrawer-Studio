@@ -12,6 +12,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication, QFileDialog
 
 from tooldrawer_studio.calibration.service import PixelPoint
+from tooldrawer_studio.domain.models import Point2D, ToolObject
 from tooldrawer_studio.ui.calibration_view import CalibrationImageView
 from tooldrawer_studio.ui.main_window import MainWindow
 from tooldrawer_studio.ui.measure_panel import MeasurePanel
@@ -24,6 +25,25 @@ def _png_bytes(width: int = 50, height: int = 20) -> bytes:
     ok, encoded = cv2.imencode(".png", pixels)
     assert ok
     return encoded.tobytes()
+
+
+def _add_window_tool(window: MainWindow, capture_id: str) -> ToolObject:
+    contour = [
+        Point2D(1, 1),
+        Point2D(10, 1),
+        Point2D(10, 8),
+        Point2D(1, 8),
+    ]
+    tool = ToolObject(
+        id="tool-1",
+        name="Ratchet",
+        source_capture_id=capture_id,
+        base_contour_mm=list(contour),
+        contour_mm=list(contour),
+    )
+    window.controller.project.tools.append(tool)
+    window.controller.select_tool(tool.id)
+    return tool
 
 
 def test_main_window_constructs_with_five_workflow_stages():
@@ -128,6 +148,67 @@ def test_promote_pending_capture_adds_to_project_without_consuming_tray_item():
     assert [pending.id for pending in window.capture_session.items()] == [item.id]
     assert window.capture_tray.list_widget.count() == 1
     assert all(window.tabs.isTabEnabled(index) is False for index in (1, 2, 3, 4))
+    window.close()
+    assert app is not None
+
+
+def test_measure_sources_exclude_selected_tools_top_capture():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    top_capture = window.controller.import_image_bytes(_png_bytes(), "top.png")
+    _add_window_tool(window, top_capture)
+    side_capture = window.controller.import_image_bytes(_png_bytes(), "side.png")
+
+    window._refresh_measure_sources_if_possible()
+
+    source_data = [
+        window.measure_panel.source_combo.itemData(index)
+        for index in range(window.measure_panel.source_combo.count())
+    ]
+    assert ("project", top_capture) not in source_data
+    assert ("project", side_capture) in source_data
+    window.close()
+    assert app is not None
+
+
+def test_pending_side_view_promotion_restores_top_capture_as_active_context():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    top_capture = window.controller.import_image_bytes(_png_bytes(), "top.png")
+    tool = _add_window_tool(window, top_capture)
+    pending = window.capture_session.add_bytes("phone", _png_bytes(), "side.png")
+    window._refresh_measure_sources_if_possible()
+    index = window.measure_panel.source_combo.findData(("pending", pending.id))
+    assert index >= 0
+    window.measure_panel.source_combo.setCurrentIndex(index)
+
+    window._measure_attach_side_view()
+
+    assert tool.side_view_capture_id is not None
+    assert tool.side_view_capture_id != top_capture
+    assert window.controller.active_capture_id == top_capture
+    assert [item.id for item in window.capture_session.items()] == [pending.id]
+    window.close()
+    assert app is not None
+
+
+def test_finishing_side_calibration_restores_top_capture_context():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    top_capture = window.controller.import_image_bytes(_png_bytes(420, 220), "top.png")
+    tool = _add_window_tool(window, top_capture)
+    side_capture = window.controller.import_image_bytes(_png_bytes(420, 220), "side.png")
+    window.controller.attach_side_view(tool.id, side_capture)
+    window.controller.activate_capture(side_capture)
+    window._measure_calibration_tool_id = tool.id
+    record = window.controller.calibrate_known_distance(
+        PixelPoint(10, 20), PixelPoint(410, 20), 200.0
+    )
+
+    window._advance_after_calibration(record)
+
+    assert window.controller.active_capture_id == top_capture
+    assert window.tabs.currentIndex() == 2
     window.close()
     assert app is not None
 
