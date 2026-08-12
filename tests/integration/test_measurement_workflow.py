@@ -72,6 +72,10 @@ class ExplodingMeasurementService:
 
 
 def _side_calibration(controller: WorkflowController) -> None:
+    tool = controller.selected_tool()
+    if tool.side_view_capture_id is None:
+        raise AssertionError("test requires an attached side-view capture")
+    controller.activate_capture(tool.side_view_capture_id)
     controller.calibrate_known_distance(
         PixelPoint(10, 20),
         PixelPoint(410, 20),
@@ -176,11 +180,7 @@ def test_replacement_and_recalibration_preserve_only_explicit_manual_values():
     controller.set_manual_thickness(tool.id, 18.0)
     controller.set_pocket_depth_override(tool.id, 13.5)
     _side_calibration(controller)
-    controller.calibrate_known_distance(
-        PixelPoint(10, 20),
-        PixelPoint(390, 20),
-        known_distance_mm=190.0,
-    )
+    _side_calibration(controller)
 
     assert tool.accepted_thickness_mm == pytest.approx(18.0)
     assert tool.thickness_measurement_mode == "manual"
