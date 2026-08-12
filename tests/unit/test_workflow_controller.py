@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import cv2
+import numpy as np
 import pytest
 
 from tooldrawer_studio.calibration.presets import A4
@@ -45,6 +47,19 @@ def test_low_confidence_calibration_blocks_tracing_without_override(simple_tools
 
     tools = controller.trace_tools(allow_low_confidence=True)
     assert len(tools) == 2
+
+
+def test_active_image_display_bytes_match_normalized_capture(simple_tools_image_path: Path):
+    controller = WorkflowController()
+    capture_id = controller.import_image(simple_tools_image_path)
+    capture = next(item for item in controller.project.captures if item.id == capture_id)
+
+    raw = controller.active_image_display_bytes()
+    pixels = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+    assert pixels is not None
+    assert pixels.shape[1] == capture.width_px
+    assert pixels.shape[0] == capture.height_px
 
 
 def test_save_reopen_restores_active_paper_calibration(
