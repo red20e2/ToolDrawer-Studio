@@ -159,6 +159,48 @@ def test_start_and_stop_phone_session_update_qr_ui_without_real_listener():
     assert app is not None
 
 
+def test_qr_render_failure_stops_listener_and_clears_phone_ui(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+
+    class FakeServer:
+        def __init__(self) -> None:
+            self.is_running = False
+            self.stop_count = 0
+
+        def start(self):
+            self.is_running = True
+            return SimpleNamespace(
+                host="192.168.1.20",
+                port=8123,
+                upload_url="http://192.168.1.20:8123/upload?token=test-token",
+            )
+
+        def stop(self) -> None:
+            self.is_running = False
+            self.stop_count += 1
+
+    def fail_qr(_url: str):
+        raise RuntimeError("Could not render QR")
+
+    fake = FakeServer()
+    errors: list[Exception] = []
+    window.phone_server = fake
+    monkeypatch.setattr("tooldrawer_studio.ui.main_window.qr_image", fail_qr)
+    monkeypatch.setattr(window, "_show_error", errors.append)
+
+    window._start_phone_session()
+
+    assert fake.stop_count == 1
+    assert fake.is_running is False
+    assert window.phone_status.text() == "Phone capture: could not start"
+    assert window.start_phone_button.isEnabled() is True
+    assert window.stop_phone_button.isEnabled() is False
+    assert len(errors) == 1
+    window.close()
+    assert app is not None
+
+
 def test_close_event_stops_phone_server_and_webcam_service():
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
