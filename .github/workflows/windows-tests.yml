@@ -25,5 +25,6 @@ jobs:
         run: |
           python -m compileall -q src tests
           python -c "from tooldrawer_studio.ui.main_window import MainWindow; from tooldrawer_studio.measurement.service import ThicknessMeasurementService; print('imports-ok')"
+          python -c "import shapely; from tooldrawer_studio.layout.packer import pack_layout; from tooldrawer_studio.ui.arrange_panel import ArrangePanel; print('arrange-imports-ok')"
       - name: Run tests
         run: python -m pytest -q
