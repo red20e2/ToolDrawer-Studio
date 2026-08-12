@@ -1,3 +1,5 @@
+from xml.etree import ElementTree as ET
+
 import cv2
 import numpy as np
 import pytest
@@ -48,6 +50,36 @@ def test_a4_target_svg_has_physical_page_size_and_four_fiducials():
     assert 'height="297mm"' in svg
     assert svg.count("<rect") == 4
     assert "100 mm" in svg
+
+
+def test_target_svg_guide_lines_do_not_touch_fiducials():
+    root = ET.fromstring(target_svg(CalibrationTargetSpec(A4)))
+    rectangles = []
+    lines = []
+    for element in root:
+        tag = element.tag.rsplit("}", 1)[-1]
+        if tag == "rect":
+            rectangles.append(
+                (
+                    float(element.attrib["x"]),
+                    float(element.attrib["y"]),
+                    float(element.attrib["width"]),
+                    float(element.attrib["height"]),
+                )
+            )
+        elif tag == "line":
+            lines.append(
+                tuple(float(element.attrib[key]) for key in ("x1", "y1", "x2", "y2"))
+            )
+
+    for x1, y1, x2, y2 in lines:
+        for rect_x, rect_y, rect_w, rect_h in rectangles:
+            rect_right = rect_x + rect_w
+            rect_bottom = rect_y + rect_h
+            if y1 == pytest.approx(y2) and rect_y <= y1 <= rect_bottom:
+                assert max(min(x1, x2), rect_x) >= min(max(x1, x2), rect_right)
+            if x1 == pytest.approx(x2) and rect_x <= x1 <= rect_right:
+                assert max(min(y1, y2), rect_y) >= min(max(y1, y2), rect_bottom)
 
 
 def test_detect_target_orders_four_fiducials_under_perspective():
