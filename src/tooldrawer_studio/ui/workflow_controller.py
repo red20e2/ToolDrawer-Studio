@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from math import hypot, isfinite
 from pathlib import Path
 from uuid import uuid4
@@ -27,6 +28,10 @@ from tooldrawer_studio.domain.models import CalibrationRecord, Point2D, Project,
 from tooldrawer_studio.export.service import ExportPaths, export_tool_package
 from tooldrawer_studio.geometry.contour import replace_tool_contour, reset_tool_contour
 from tooldrawer_studio.geometry.pocket import PocketSpec, build_pocket_insert
+from tooldrawer_studio.layout.geometry import oriented_cavity_polygon
+from tooldrawer_studio.layout.models import LayoutState, ToolPlacement
+from tooldrawer_studio.layout.packer import PackingResult, pack_layout
+from tooldrawer_studio.layout.validation import LayoutValidationResult, validate_layout
 from tooldrawer_studio.measurement.depth import (
     final_pocket_depth_mm,
     suggested_pocket_depth_mm,
@@ -43,6 +48,7 @@ from tooldrawer_studio.tracing.opencv_tracer import OpenCVTracer
 
 
 MIN_AUTOMATIC_TRACE_CALIBRATION_CONFIDENCE = 0.75
+_UNSET = object()
 
 
 def _validate_nonnegative(value: float, label: str) -> float:
@@ -56,6 +62,13 @@ def _validate_positive(value: float, label: str) -> float:
     converted = float(value)
     if not isfinite(converted) or converted <= 0:
         raise ValueError(f"{label} must be finite and positive")
+    return converted
+
+
+def _validate_finite(value: float, label: str) -> float:
+    converted = float(value)
+    if not isfinite(converted):
+        raise ValueError(f"{label} must be finite")
     return converted
 
 
@@ -253,6 +266,7 @@ class WorkflowController:
                 )
             )
         self.project.tools = retained + created
+        self._reconcile_layout_tools()
         if created:
             self._selected_tool_id = created[0].id
         return created
@@ -263,16 +277,320 @@ class WorkflowController:
                 return index
         raise KeyError(f"Unknown tool id: {tool_id}")
 
+    def _mark_layout_review_required(self) -> None:
+        if self.project.layout is not None:
+            self.project.layout.review_required = True
+
+    def _reconcile_layout_tools(self) -> None:
+        layout = self.project.layout
+        if layout is None:
+            return
+        existing = {placement.tool_id: placement for placement in layout.placements}
+        reconciled: list[ToolPlacement] = []
+        for tool in self.project.tools:
+            prior = existing.get(tool.id)
+            reconciled.append(
+                replace(prior) if prior is not None else ToolPlacement(tool_id=tool.id)
+            )
+        layout.placements = reconciled
+        layout.unplaced_tool_ids = [
+            placement.tool_id for placement in reconciled if not placement.is_placed
+        ]
+        layout.review_required = True
+
+    def _require_layout(self) -> LayoutState:
+        if self.project.layout is None:
+            raise ValueError("Configure an Arrange layout first")
+        return self.project.layout
+
+    def _placement_for(self, tool_id: str) -> ToolPlacement:
+        self._tool_index(tool_id)
+        layout = self._require_layout()
+        placement = layout.placement_for(tool_id)
+        if placement is None:
+            placement = ToolPlacement(tool_id=tool_id)
+            layout.placements.append(placement)
+            layout.unplaced_tool_ids.append(tool_id)
+        return placement
+
+    def _preserved_layout_placements(self) -> list[ToolPlacement]:
+        prior = self.project.layout
+        by_id = (
+            {placement.tool_id: placement for placement in prior.placements}
+            if prior is not None
+            else {}
+        )
+        return [
+            replace(by_id[tool.id]) if tool.id in by_id else ToolPlacement(tool_id=tool.id)
+            for tool in self.project.tools
+        ]
+
+    def configure_foam_layout(self, width_mm: float, height_mm: float) -> LayoutState:
+        placements = self._preserved_layout_placements()
+        prior_had_placed = any(placement.is_placed for placement in placements)
+        self.project.layout = LayoutState(
+            mode="foam",
+            foam_width_mm=_validate_positive(width_mm, "Layout width"),
+            foam_height_mm=_validate_positive(height_mm, "Layout height"),
+            spacing_mm=self.project.default_layout_spacing_mm,
+            border_mm=self.project.default_layout_border_mm,
+            grab_clearance_mm=self.project.default_grab_clearance_mm,
+            snap_enabled=(self.project.layout.snap_enabled if self.project.layout else False),
+            snap_increment_mm=self.project.default_snap_increment_mm,
+            placements=placements,
+            unplaced_tool_ids=[
+                placement.tool_id for placement in placements if not placement.is_placed
+            ],
+            review_required=prior_had_placed,
+        )
+        return self.project.layout
+
+    def configure_gridfinity_layout(
+        self,
+        columns: int,
+        rows: int,
+        pitch_mm: float | None = None,
+    ) -> LayoutState:
+        placements = self._preserved_layout_placements()
+        prior_had_placed = any(placement.is_placed for placement in placements)
+        pitch = (
+            self.project.gridfinity_pitch_mm
+            if pitch_mm is None
+            else _validate_positive(pitch_mm, "Gridfinity pitch")
+        )
+        self.project.gridfinity_pitch_mm = pitch
+        self.project.layout = LayoutState(
+            mode="gridfinity",
+            grid_columns=int(columns),
+            grid_rows=int(rows),
+            grid_pitch_mm=pitch,
+            spacing_mm=self.project.default_layout_spacing_mm,
+            border_mm=self.project.default_layout_border_mm,
+            grab_clearance_mm=self.project.default_grab_clearance_mm,
+            snap_enabled=(self.project.layout.snap_enabled if self.project.layout else False),
+            snap_increment_mm=self.project.default_snap_increment_mm,
+            placements=placements,
+            unplaced_tool_ids=[
+                placement.tool_id for placement in placements if not placement.is_placed
+            ],
+            review_required=prior_had_placed,
+        )
+        return self.project.layout
+
+    def set_layout_defaults(
+        self,
+        *,
+        spacing_mm: float | None = None,
+        border_mm: float | None = None,
+        grab_clearance_mm: float | None = None,
+        snap_increment_mm: float | None = None,
+    ) -> LayoutState | None:
+        layout = self.project.layout
+        geometry_changed = False
+        if spacing_mm is not None:
+            value = _validate_nonnegative(spacing_mm, "Layout spacing")
+            self.project.default_layout_spacing_mm = value
+            if layout is not None and layout.spacing_mm != value:
+                layout.spacing_mm = value
+                geometry_changed = True
+        if border_mm is not None:
+            value = _validate_nonnegative(border_mm, "Layout border")
+            self.project.default_layout_border_mm = value
+            if layout is not None and layout.border_mm != value:
+                layout.border_mm = value
+                geometry_changed = True
+        if grab_clearance_mm is not None:
+            value = _validate_nonnegative(grab_clearance_mm, "Grab clearance")
+            self.project.default_grab_clearance_mm = value
+            if layout is not None and layout.grab_clearance_mm != value:
+                layout.grab_clearance_mm = value
+                geometry_changed = True
+        if snap_increment_mm is not None:
+            value = _validate_positive(snap_increment_mm, "Snap increment")
+            self.project.default_snap_increment_mm = value
+            if layout is not None:
+                layout.snap_increment_mm = value
+        if layout is not None and geometry_changed:
+            layout.review_required = True
+        return layout
+
+    def set_layout_snap(self, enabled: bool) -> LayoutState:
+        layout = self._require_layout()
+        layout.snap_enabled = bool(enabled)
+        return layout
+
+    def set_tool_layout_options(
+        self,
+        tool_id: str,
+        *,
+        rotation_policy: str | None = None,
+        grab_side: str | None = None,
+        grab_clearance_override_mm: object = _UNSET,
+    ) -> ToolPlacement:
+        placement = self._placement_for(tool_id)
+        changed_geometry = False
+        if rotation_policy is not None and rotation_policy != placement.rotation_policy:
+            probe = ToolPlacement(tool_id=tool_id, rotation_policy=rotation_policy)
+            placement.rotation_policy = probe.rotation_policy
+            if placement.rotation_policy == "orthogonal":
+                normalized = placement.rotation_deg % 360.0
+                placement.rotation_deg = float(int((normalized + 45.0) // 90.0) * 90 % 360)
+            changed_geometry = placement.is_placed
+        if grab_side is not None and grab_side != placement.grab_side:
+            probe = ToolPlacement(tool_id=tool_id, grab_side=grab_side)
+            placement.grab_side = probe.grab_side
+            changed_geometry = changed_geometry or placement.is_placed
+        if grab_clearance_override_mm is not _UNSET:
+            value = (
+                None
+                if grab_clearance_override_mm is None
+                else _validate_nonnegative(
+                    float(grab_clearance_override_mm), "Grab clearance override"
+                )
+            )
+            if value != placement.grab_clearance_override_mm:
+                placement.grab_clearance_override_mm = value
+                changed_geometry = changed_geometry or placement.is_placed
+        if changed_geometry:
+            self._mark_layout_review_required()
+        return placement
+
+    def move_tool(self, tool_id: str, x_mm: float, y_mm: float) -> ToolPlacement:
+        placement = self._placement_for(tool_id)
+        if placement.locked:
+            raise ValueError("Unlock the tool before moving it")
+        placement.x_mm = _validate_finite(x_mm, "Tool X")
+        placement.y_mm = _validate_finite(y_mm, "Tool Y")
+        placement.is_placed = True
+        layout = self._require_layout()
+        layout.unplaced_tool_ids = [
+            value for value in layout.unplaced_tool_ids if value != tool_id
+        ]
+        layout.review_required = True
+        return placement
+
+    def rotate_tool(self, tool_id: str, rotation_deg: float) -> ToolPlacement:
+        placement = self._placement_for(tool_id)
+        if placement.locked:
+            raise ValueError("Unlock the tool before rotating it")
+        if placement.rotation_policy == "fixed":
+            raise ValueError("Tool rotation is fixed")
+        requested = _validate_finite(rotation_deg, "Tool rotation") % 360.0
+        if placement.rotation_policy == "orthogonal":
+            requested = float(int((requested + 45.0) // 90.0) * 90 % 360)
+        placement.rotation_deg = requested
+        placement.is_placed = True
+        layout = self._require_layout()
+        layout.unplaced_tool_ids = [
+            value for value in layout.unplaced_tool_ids if value != tool_id
+        ]
+        layout.review_required = True
+        return placement
+
+    def set_tool_locked(self, tool_id: str, locked: bool) -> ToolPlacement:
+        placement = self._placement_for(tool_id)
+        placement.locked = bool(locked)
+        return placement
+
+    def validate_arrangement(self) -> LayoutValidationResult:
+        layout = self._require_layout()
+        return validate_layout(self.project, layout)
+
+    def _apply_packing_result(self, result: PackingResult) -> PackingResult:
+        layout = self._require_layout()
+        layout.placements = [replace(placement) for placement in result.placements]
+        layout.unplaced_tool_ids = list(result.unplaced_tool_ids)
+        layout.review_required = not result.validation.valid
+        return result
+
+    def auto_arrange(self) -> PackingResult:
+        layout = self._require_layout()
+        return self._apply_packing_result(pack_layout(self.project, layout))
+
+    def repack_unlocked(self) -> PackingResult:
+        layout = self._require_layout()
+        return self._apply_packing_result(
+            pack_layout(self.project, layout, repack_unlocked_only=True)
+        )
+
+    def _selected_placed_layout_items(
+        self, tool_ids: list[str]
+    ) -> list[tuple[ToolObject, ToolPlacement]]:
+        if len(tool_ids) < 2:
+            raise ValueError("Select at least two tools")
+        items: list[tuple[ToolObject, ToolPlacement]] = []
+        for tool_id in tool_ids:
+            tool = self.project.tools[self._tool_index(tool_id)]
+            placement = self._placement_for(tool_id)
+            if not placement.is_placed:
+                raise ValueError("All selected tools must be placed")
+            if placement.locked:
+                raise ValueError("Unlock selected tools before aligning or distributing")
+            items.append((tool, placement))
+        return items
+
+    def align_tools(self, tool_ids: list[str], mode: str) -> None:
+        items = self._selected_placed_layout_items(tool_ids)
+        geometries = [oriented_cavity_polygon(tool, placement) for tool, placement in items]
+        bounds = [geometry.bounds for geometry in geometries]
+        centers = [geometry.centroid for geometry in geometries]
+        if mode == "left":
+            target = min(value[0] for value in bounds)
+            deltas = [(target - value[0], 0.0) for value in bounds]
+        elif mode == "right":
+            target = max(value[2] for value in bounds)
+            deltas = [(target - value[2], 0.0) for value in bounds]
+        elif mode == "bottom":
+            target = min(value[1] for value in bounds)
+            deltas = [(0.0, target - value[1]) for value in bounds]
+        elif mode == "top":
+            target = max(value[3] for value in bounds)
+            deltas = [(0.0, target - value[3]) for value in bounds]
+        elif mode == "center_x":
+            target = sum(center.x for center in centers) / len(centers)
+            deltas = [(target - center.x, 0.0) for center in centers]
+        elif mode == "center_y":
+            target = sum(center.y for center in centers) / len(centers)
+            deltas = [(0.0, target - center.y) for center in centers]
+        else:
+            raise ValueError(f"Unknown alignment mode: {mode}")
+        for (_, placement), (dx, dy) in zip(items, deltas, strict=True):
+            placement.x_mm += dx
+            placement.y_mm += dy
+        self._mark_layout_review_required()
+
+    def distribute_tools(self, tool_ids: list[str], axis: str) -> None:
+        items = self._selected_placed_layout_items(tool_ids)
+        if axis == "horizontal":
+            ordered = sorted(items, key=lambda item: item[1].x_mm)
+            low = ordered[0][1].x_mm
+            high = ordered[-1][1].x_mm
+            step = (high - low) / (len(ordered) - 1)
+            for index, (_, placement) in enumerate(ordered):
+                placement.x_mm = low + step * index
+        elif axis == "vertical":
+            ordered = sorted(items, key=lambda item: item[1].y_mm)
+            low = ordered[0][1].y_mm
+            high = ordered[-1][1].y_mm
+            step = (high - low) / (len(ordered) - 1)
+            for index, (_, placement) in enumerate(ordered):
+                placement.y_mm = low + step * index
+        else:
+            raise ValueError(f"Unknown distribution axis: {axis}")
+        self._mark_layout_review_required()
+
     def replace_contour(self, tool_id: str, points: list[Point2D]) -> ToolObject:
         index = self._tool_index(tool_id)
         updated = replace_tool_contour(self.project.tools[index], points)
         self.project.tools[index] = updated
+        self._mark_layout_review_required()
         return updated
 
     def reset_contour(self, tool_id: str) -> ToolObject:
         index = self._tool_index(tool_id)
         updated = reset_tool_contour(self.project.tools[index])
         self.project.tools[index] = updated
+        self._mark_layout_review_required()
         return updated
 
     def rename_tool(self, tool_id: str, name: str) -> None:
@@ -291,7 +609,10 @@ class WorkflowController:
         if clearance_mm is not None:
             if clearance_mm < 0:
                 raise ValueError("Tool clearance must be non-negative")
-            tool.clearance_mm = float(clearance_mm)
+            new_clearance = float(clearance_mm)
+            if new_clearance != tool.clearance_mm:
+                tool.clearance_mm = new_clearance
+                self._mark_layout_review_required()
         return tool
 
     def attach_side_view(self, tool_id: str, capture_id: str) -> ToolObject:
