@@ -8,11 +8,13 @@ from tooldrawer_studio.measurement.service import ThicknessMeasurementService
 
 
 def _calibration():
+    # 400 px over 200 mm preserves the intended 0.5 mm/px scale while
+    # meeting the existing calibration service's high-confidence threshold.
     return calibrate_known_distance(
         "side",
-        PixelPoint(20, 20),
-        PixelPoint(220, 20),
-        100.0,
+        PixelPoint(10, 20),
+        PixelPoint(410, 20),
+        200.0,
     )
 
 
