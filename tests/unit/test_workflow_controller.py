@@ -219,6 +219,34 @@ def test_automatic_measurement_obeys_confidence_gate_and_manual_precedence(monke
     assert tool.thickness_accepted is False
 
 
+def test_automatic_reanalysis_preserves_accepted_endpoint_measurement(monkeypatch):
+    controller = WorkflowController()
+    top_capture_id = controller.import_image_bytes(_png_bytes(420, 220), "top.png")
+    tool = _add_tool(controller, top_capture_id)
+    side_capture_id = controller.import_image_bytes(_png_bytes(420, 220), "side.png")
+    controller.attach_side_view(tool.id, side_capture_id)
+    controller.calibrate_known_distance(
+        PixelPoint(10, 20), PixelPoint(410, 20), known_distance_mm=200.0
+    )
+    controller.set_thickness_endpoints(
+        tool.id, ImagePoint(10.0, 20.0), ImagePoint(10.0, 60.0)
+    )
+    assert tool.accepted_thickness_mm == pytest.approx(20.0)
+    assert tool.thickness_measurement_mode == "endpoints"
+
+    monkeypatch.setattr(
+        "tooldrawer_studio.ui.workflow_controller.ThicknessMeasurementService.measure",
+        lambda _service, _pixels, _calibration: _fake_result(22.0, 0.95),
+    )
+    controller.measure_tool_thickness(tool.id)
+
+    assert tool.automatic_thickness_mm == pytest.approx(22.0)
+    assert tool.accepted_thickness_mm == pytest.approx(20.0)
+    assert tool.thickness_measurement_mode == "endpoints"
+    assert tool.thickness_accepted is True
+    assert tool.thickness_review_required is True
+
+
 def test_replacing_side_view_invalidates_image_measurement_but_preserves_manual_data():
     controller = WorkflowController()
     top_capture_id = controller.import_image_bytes(_png_bytes(60, 30), "top.png")
