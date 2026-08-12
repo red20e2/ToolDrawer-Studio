@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -22,10 +23,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from tooldrawer_studio.calibration.service import PixelPoint
-from tooldrawer_studio.domain.models import Point2D, ToolObject
+from tooldrawer_studio.calibration.presets import A4, LETTER
+from tooldrawer_studio.calibration.target import CalibrationTargetSpec, write_target_svg
+from tooldrawer_studio.domain.models import CalibrationRecord, Point2D, ToolObject
+from tooldrawer_studio.ui.calibration_view import CalibrationImageView
 from tooldrawer_studio.ui.contour_editor import ContourEditor
-from tooldrawer_studio.ui.workflow_controller import WorkflowController
+from tooldrawer_studio.ui.workflow_controller import (
+    MIN_AUTOMATIC_TRACE_CALIBRATION_CONFIDENCE,
+    WorkflowController,
+)
 
 
 class MainWindow(QMainWindow):
@@ -45,7 +51,12 @@ class MainWindow(QMainWindow):
         self.tabs.setTabEnabled(3, False)
 
     @staticmethod
-    def _number(minimum: float, maximum: float, value: float, decimals: int = 3) -> QDoubleSpinBox:
+    def _number(
+        minimum: float,
+        maximum: float,
+        value: float,
+        decimals: int = 3,
+    ) -> QDoubleSpinBox:
         widget = QDoubleSpinBox()
         widget.setRange(minimum, maximum)
         widget.setDecimals(decimals)
@@ -56,6 +67,7 @@ class MainWindow(QMainWindow):
     def _capture_stage(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+
         controls = QHBoxLayout()
         import_button = QPushButton("Import Photo")
         open_button = QPushButton("Open .tds Project")
@@ -65,32 +77,76 @@ class MainWindow(QMainWindow):
         controls.addWidget(open_button)
         controls.addStretch()
         layout.addLayout(controls)
-        self.photo_label = QLabel("Import a tool photo to begin")
-        self.photo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.photo_label.setMinimumHeight(280)
-        layout.addWidget(self.photo_label)
+
+        self.calibration_view = CalibrationImageView()
+        self.calibration_view.setMinimumHeight(300)
+        layout.addWidget(self.calibration_view, 1)
+
         form = QFormLayout()
-        self.ax = self._number(-100000, 100000, 0)
-        self.ay = self._number(-100000, 100000, 0)
-        self.bx = self._number(-100000, 100000, 100)
-        self.by = self._number(-100000, 100000, 0)
-        for widget in (self.ax, self.ay, self.bx, self.by):
-            widget.setSuffix(" px")
+        self.calibration_mode = QComboBox()
+        self.calibration_mode.addItem("Known distance", "known_distance")
+        self.calibration_mode.addItem("A4 sheet", "paper_a4")
+        self.calibration_mode.addItem("US Letter", "paper_letter")
+        self.calibration_mode.addItem("Known-size object", "known_object")
+        self.calibration_mode.addItem("Printable target", "target")
+        form.addRow("Calibration method", self.calibration_mode)
+
+        self.known_distance_label = QLabel("Known distance")
         self.known_distance = self._number(0.001, 100000, 100)
-        form.addRow("Point A X", self.ax)
-        form.addRow("Point A Y", self.ay)
-        form.addRow("Point B X", self.bx)
-        form.addRow("Point B Y", self.by)
-        form.addRow("Known distance", self.known_distance)
+        form.addRow(self.known_distance_label, self.known_distance)
+
+        self.object_width_label = QLabel("Object width")
+        self.object_width = self._number(0.001, 100000, 100)
+        self.object_height_label = QLabel("Object height")
+        self.object_height = self._number(0.001, 100000, 50)
+        form.addRow(self.object_width_label, self.object_width)
+        form.addRow(self.object_height_label, self.object_height)
+
+        self.target_paper_label = QLabel("Target paper")
+        self.target_paper = QComboBox()
+        self.target_paper.addItem("A4", "a4")
+        self.target_paper.addItem("US Letter", "letter")
+        form.addRow(self.target_paper_label, self.target_paper)
         layout.addLayout(form)
-        calibrate_button = QPushButton("Calibrate")
-        calibrate_button.clicked.connect(self._calibrate)
-        layout.addWidget(calibrate_button)
+
+        self.calibration_instruction = QLabel()
+        self.calibration_instruction.setWordWrap(True)
+        layout.addWidget(self.calibration_instruction)
+
+        calibration_actions = QHBoxLayout()
+        clear_points_button = QPushButton("Clear Points")
+        clear_points_button.clicked.connect(self.calibration_view.clear_points)
+        self.calibrate_button = QPushButton("Calibrate")
+        self.calibrate_button.clicked.connect(self._calibrate)
+        self.save_target_button = QPushButton("Save Printable Target…")
+        self.save_target_button.clicked.connect(self._save_target)
+        self.detect_target_button = QPushButton("Detect Target")
+        self.detect_target_button.clicked.connect(self._detect_target_calibration)
+        calibration_actions.addWidget(clear_points_button)
+        calibration_actions.addWidget(self.calibrate_button)
+        calibration_actions.addWidget(self.save_target_button)
+        calibration_actions.addWidget(self.detect_target_button)
+        calibration_actions.addStretch()
+        layout.addLayout(calibration_actions)
+
         self.calibration_status = QLabel("Calibration: not set")
         layout.addWidget(self.calibration_status)
-        disclaimer = QLabel("Photo-derived dimensions are manufacturing aids, not metrology-grade measurements.")
+        self.low_confidence_override = QCheckBox(
+            "Allow low-confidence automatic tracing"
+        )
+        self.low_confidence_override.setVisible(False)
+        layout.addWidget(self.low_confidence_override)
+
+        disclaimer = QLabel(
+            "Photo-derived dimensions are manufacturing aids, not metrology-grade measurements."
+        )
         disclaimer.setWordWrap(True)
         layout.addWidget(disclaimer)
+
+        self.calibration_mode.currentIndexChanged.connect(
+            self._calibration_mode_changed
+        )
+        self._calibration_mode_changed()
         return page
 
     def _edit_stage(self) -> QWidget:
@@ -143,7 +199,11 @@ class MainWindow(QMainWindow):
         reset_button.clicked.connect(self._reset_trace)
         right.addWidget(self.contour_editor)
         self.coordinate_label = QLabel("Vertex: --")
-        self.contour_editor.coordinateChanged.connect(lambda x, y: self.coordinate_label.setText(f"Vertex: {x:.3f}, {y:.3f} mm"))
+        self.contour_editor.coordinateChanged.connect(
+            lambda x, y: self.coordinate_label.setText(
+                f"Vertex: {x:.3f}, {y:.3f} mm"
+            )
+        )
         right.addWidget(self.coordinate_label)
         layout.addLayout(right, 3)
         return page
@@ -187,22 +247,85 @@ class MainWindow(QMainWindow):
     def _show_error(self, exc: Exception) -> None:
         QMessageBox.critical(self, "ToolDrawer Studio", str(exc))
 
-    def _set_photo_pixmap(self, pixmap: QPixmap) -> None:
-        if pixmap.isNull():
-            self.photo_label.setText("Image could not be displayed")
-            return
-        self.photo_label.setPixmap(pixmap.scaled(self.photo_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+    def _calibration_mode_changed(self, _index: int | None = None) -> None:
+        mode = str(self.calibration_mode.currentData())
+        required = {
+            "known_distance": 2,
+            "paper_a4": 4,
+            "paper_letter": 4,
+            "known_object": 4,
+            "target": 0,
+        }[mode]
+        self.calibration_view.set_required_points(required)
+
+        known_distance = mode == "known_distance"
+        known_object = mode == "known_object"
+        target = mode == "target"
+        self.known_distance_label.setVisible(known_distance)
+        self.known_distance.setVisible(known_distance)
+        self.object_width_label.setVisible(known_object)
+        self.object_width.setVisible(known_object)
+        self.object_height_label.setVisible(known_object)
+        self.object_height.setVisible(known_object)
+        self.target_paper_label.setVisible(target)
+        self.target_paper.setVisible(target)
+        self.save_target_button.setVisible(target)
+        self.detect_target_button.setVisible(target)
+        self.calibrate_button.setVisible(not target)
+
+        instructions = {
+            "known_distance": "Click two points with a known real-world distance between them.",
+            "paper_a4": "Click A4 corners in order: top-left, top-right, bottom-right, bottom-left.",
+            "paper_letter": "Click Letter corners in order: top-left, top-right, bottom-right, bottom-left.",
+            "known_object": "Click object corners in order: top-left, top-right, bottom-right, bottom-left, then enter its real dimensions.",
+            "target": "Print the ToolDrawer target at 100% scale, photograph it with the tools, then use Detect Target.",
+        }
+        self.calibration_instruction.setText(instructions[mode])
+
+    @staticmethod
+    def _require_point_count(points: tuple, expected: int) -> None:
+        if len(points) != expected:
+            raise ValueError(f"Select exactly {expected} calibration points")
+
+    def _target_spec(self) -> CalibrationTargetSpec:
+        paper = A4 if self.target_paper.currentData() == "a4" else LETTER
+        return CalibrationTargetSpec(paper)
+
+    def _update_calibration_status(self, record: CalibrationRecord) -> None:
+        self.calibration_status.setText(
+            f"Calibration: {record.method}, confidence {record.confidence:.0%}"
+        )
+        low = record.confidence < MIN_AUTOMATIC_TRACE_CALIBRATION_CONFIDENCE
+        self.low_confidence_override.setVisible(low)
+        if not low:
+            self.low_confidence_override.setChecked(False)
+        self.tabs.setTabEnabled(1, True)
+
+    def _advance_after_calibration(self, record: CalibrationRecord) -> None:
+        if record.confidence >= MIN_AUTOMATIC_TRACE_CALIBRATION_CONFIDENCE:
+            self.tabs.setCurrentIndex(1)
+        else:
+            self.tabs.setCurrentIndex(0)
 
     def _import_photo(self) -> None:
-        filename, _ = QFileDialog.getOpenFileName(self, "Import Tool Photo", "", "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)")
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Tool Photo",
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
+        )
         if not filename:
             return
         try:
             path = Path(filename)
             self.controller = WorkflowController()
             self.controller.import_image(path)
-            self._set_photo_pixmap(QPixmap(str(path)))
+            self.calibration_view.set_image_bytes(
+                self.controller.active_image_display_bytes()
+            )
             self.calibration_status.setText("Calibration: not set")
+            self.low_confidence_override.setChecked(False)
+            self.low_confidence_override.setVisible(False)
             self.tool_list.clear()
             for index in (1, 2, 3):
                 self.tabs.setTabEnabled(index, False)
@@ -211,16 +334,63 @@ class MainWindow(QMainWindow):
 
     def _calibrate(self) -> None:
         try:
-            record = self.controller.calibrate_known_distance(PixelPoint(self.ax.value(), self.ay.value()), PixelPoint(self.bx.value(), self.by.value()), self.known_distance.value())
-            self.calibration_status.setText(f"Calibration: {record.method}, confidence {record.confidence:.0%}")
-            self.tabs.setTabEnabled(1, True)
-            self.tabs.setCurrentIndex(1)
+            mode = str(self.calibration_mode.currentData())
+            points = self.calibration_view.points_px()
+            if mode == "known_distance":
+                self._require_point_count(points, 2)
+                record = self.controller.calibrate_known_distance(
+                    points[0], points[1], self.known_distance.value()
+                )
+            elif mode == "paper_a4":
+                self._require_point_count(points, 4)
+                record = self.controller.calibrate_paper(points, A4)  # type: ignore[arg-type]
+            elif mode == "paper_letter":
+                self._require_point_count(points, 4)
+                record = self.controller.calibrate_paper(points, LETTER)  # type: ignore[arg-type]
+            elif mode == "known_object":
+                self._require_point_count(points, 4)
+                record = self.controller.calibrate_known_object(  # type: ignore[arg-type]
+                    points, self.object_width.value(), self.object_height.value()
+                )
+            else:
+                raise ValueError("Use Detect Target for printable-target calibration")
+            self._update_calibration_status(record)
+            self._advance_after_calibration(record)
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _save_target(self) -> None:
+        try:
+            spec = self._target_spec()
+            default_name = f"ToolDrawer_Calibration_{spec.paper.label.replace(' ', '_')}.svg"
+            filename, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save Printable Calibration Target",
+                default_name,
+                "SVG (*.svg)",
+            )
+            if not filename:
+                return
+            path = Path(filename)
+            if path.suffix.lower() != ".svg":
+                path = path.with_suffix(".svg")
+            write_target_svg(path, spec)
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _detect_target_calibration(self) -> None:
+        try:
+            record = self.controller.calibrate_target(self._target_spec())
+            self._update_calibration_status(record)
+            self._advance_after_calibration(record)
         except Exception as exc:
             self._show_error(exc)
 
     def _detect_tools(self) -> None:
         try:
-            tools = self.controller.trace_tools()
+            tools = self.controller.trace_tools(
+                allow_low_confidence=self.low_confidence_override.isChecked()
+            )
             self._populate_tools(tools)
             if tools:
                 self.tabs.setTabEnabled(2, True)
@@ -236,7 +406,11 @@ class MainWindow(QMainWindow):
         if self.tool_list.count():
             self.tool_list.setCurrentRow(0)
 
-    def _tool_selected(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
+    def _tool_selected(
+        self,
+        current: QListWidgetItem | None,
+        _previous: QListWidgetItem | None,
+    ) -> None:
         if current is None:
             return
         try:
@@ -261,7 +435,11 @@ class MainWindow(QMainWindow):
         try:
             tool = self.controller.selected_tool()
             self.controller.rename_tool(tool.id, self.tool_name.text())
-            self.controller.update_tool_settings(tool.id, clearance_mm=self.tool_clearance.value(), depth_mm=self.tool_depth.value())
+            self.controller.update_tool_settings(
+                tool.id,
+                clearance_mm=self.tool_clearance.value(),
+                depth_mm=self.tool_depth.value(),
+            )
             current = self.tool_list.currentItem()
             if current is not None:
                 current.setText(self.controller.selected_tool().name)
@@ -275,7 +453,10 @@ class MainWindow(QMainWindow):
                 return
             index = self.segment_index.value()
             following = (index + 1) % len(points)
-            midpoint = Point2D((points[index].x_mm + points[following].x_mm) / 2.0, (points[index].y_mm + points[following].y_mm) / 2.0)
+            midpoint = Point2D(
+                (points[index].x_mm + points[following].x_mm) / 2.0,
+                (points[index].y_mm + points[following].y_mm) / 2.0,
+            )
             self.contour_editor.insert_vertex(index, midpoint)
         except Exception as exc:
             self._show_error(exc)
@@ -294,7 +475,12 @@ class MainWindow(QMainWindow):
 
     def _configure_pocket(self) -> None:
         try:
-            self.controller.configure_pocket(self.base_width.value(), self.base_height.value(), self.base_thickness.value(), self.pocket_depth.value())
+            self.controller.configure_pocket(
+                self.base_width.value(),
+                self.base_height.value(),
+                self.base_thickness.value(),
+                self.pocket_depth.value(),
+            )
             self.pocket_status.setText("Pocket settings applied")
             self.tabs.setTabEnabled(3, True)
             self.tabs.setCurrentIndex(3)
@@ -302,7 +488,12 @@ class MainWindow(QMainWindow):
             self._show_error(exc)
 
     def _save_project(self) -> None:
-        filename, _ = QFileDialog.getSaveFileName(self, "Save ToolDrawer Project", "", "ToolDrawer Studio (*.tds)")
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save ToolDrawer Project",
+            "",
+            "ToolDrawer Studio (*.tds)",
+        )
         if not filename:
             return
         try:
@@ -314,21 +505,47 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._show_error(exc)
 
+    def _set_mode_from_calibration(self, record: CalibrationRecord) -> None:
+        if record.method == "paper:a4":
+            index = 1
+        elif record.method == "paper:letter":
+            index = 2
+        elif record.method == "known_object":
+            index = 3
+        elif record.method.startswith("target:"):
+            index = 4
+            target_key = record.method.split(":", 1)[1]
+            target_index = self.target_paper.findData(target_key)
+            if target_index >= 0:
+                self.target_paper.setCurrentIndex(target_index)
+        else:
+            index = 0
+        self.calibration_mode.setCurrentIndex(index)
+
     def _open_project(self) -> None:
-        filename, _ = QFileDialog.getOpenFileName(self, "Open ToolDrawer Project", "", "ToolDrawer Studio (*.tds)")
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open ToolDrawer Project",
+            "",
+            "ToolDrawer Studio (*.tds)",
+        )
         if not filename:
             return
         try:
             self.controller = WorkflowController.open(Path(filename))
             if self.controller.project.captures:
-                capture = self.controller.project.captures[-1]
-                pixmap = QPixmap()
-                pixmap.loadFromData(self.controller.bundle.image_bytes.get(capture.id, b""))
-                self._set_photo_pixmap(pixmap)
+                self.calibration_view.set_image_bytes(
+                    self.controller.active_image_display_bytes()
+                )
             calibration = self.controller.active_calibration
             if calibration is not None:
-                self.calibration_status.setText(f"Calibration: {calibration.method}, confidence {calibration.confidence:.0%}")
-                self.tabs.setTabEnabled(1, True)
+                self._set_mode_from_calibration(calibration)
+                self._update_calibration_status(calibration)
+            else:
+                self.calibration_status.setText("Calibration: not set")
+                self.low_confidence_override.setChecked(False)
+                self.low_confidence_override.setVisible(False)
+                self.tabs.setTabEnabled(1, False)
             self._populate_tools()
             self.tabs.setTabEnabled(2, bool(self.controller.project.tools))
             self.tabs.setTabEnabled(3, False)
@@ -336,12 +553,21 @@ class MainWindow(QMainWindow):
             self._show_error(exc)
 
     def _export_files(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "Export Manufacturing Files")
+        directory = QFileDialog.getExistingDirectory(
+            self, "Export Manufacturing Files"
+        )
         if not directory:
             return
         try:
-            self.controller.configure_pocket(self.base_width.value(), self.base_height.value(), self.base_thickness.value(), self.pocket_depth.value())
+            self.controller.configure_pocket(
+                self.base_width.value(),
+                self.base_height.value(),
+                self.base_thickness.value(),
+                self.pocket_depth.value(),
+            )
             paths = self.controller.export_selected_tool(Path(directory))
-            self.export_status.setText(f"Exported:\n{paths.step}\n{paths.stl}\n{paths.dxf}")
+            self.export_status.setText(
+                f"Exported:\n{paths.step}\n{paths.stl}\n{paths.dxf}"
+            )
         except Exception as exc:
             self._show_error(exc)

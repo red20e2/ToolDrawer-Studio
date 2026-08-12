@@ -12,7 +12,7 @@ def test_vertical_slice_from_photo_to_exports(
     controller.calibrate_known_distance(
         PixelPoint(0, 0), PixelPoint(100, 0), known_distance_mm=100.0
     )
-    tools = controller.trace_tools()
+    tools = controller.trace_tools(allow_low_confidence=True)
     assert len(tools) == 2
     assert tools[0].base_contour_mm is not tools[0].contour_mm
     first = tools[0]
@@ -37,5 +37,5 @@ def test_vertical_slice_from_photo_to_exports(
     assert outputs.stl.stat().st_size > 100
     assert outputs.dxf.stat().st_size > 100
 
-    retraced = reopened.trace_tools()
+    retraced = reopened.trace_tools(allow_low_confidence=True)
     assert len(retraced) == 2

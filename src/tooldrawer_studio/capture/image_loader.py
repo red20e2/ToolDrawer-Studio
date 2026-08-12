@@ -9,6 +9,10 @@ import numpy as np
 from tooldrawer_studio.domain.models import CaptureAsset
 
 
+MAX_IMAGE_BYTES = 50 * 1024 * 1024
+MAX_IMAGE_PIXELS = 40_000_000
+
+
 @dataclass(slots=True)
 class LoadedImage:
     asset: CaptureAsset
@@ -16,12 +20,33 @@ class LoadedImage:
     original_bytes: bytes
 
 
+def _validate_raw_size(raw: bytes) -> None:
+    if len(raw) > MAX_IMAGE_BYTES:
+        raise ValueError("Image file is too large; maximum size is 50 MB")
+
+
+def _validate_pixel_size(pixels: np.ndarray) -> None:
+    height, width = pixels.shape[:2]
+    if width * height > MAX_IMAGE_PIXELS:
+        raise ValueError("Decoded image is too large; maximum size is 40 megapixels")
+
+
 def _decode_pixels(raw: bytes, description: str) -> np.ndarray:
+    _validate_raw_size(raw)
     encoded = np.frombuffer(raw, dtype=np.uint8)
     pixels = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
     if pixels is None:
         raise ValueError(f"Unsupported or invalid image: {description}")
+    _validate_pixel_size(pixels)
     return pixels
+
+
+def normalized_png_bytes(image: LoadedImage) -> bytes:
+    """Encode the normalized working pixels for a calibration/display view."""
+    ok, encoded = cv2.imencode(".png", image.pixels_bgr)
+    if not ok:
+        raise ValueError("Could not encode normalized image for display")
+    return encoded.tobytes()
 
 
 def load_image(path: Path, capture_id: str) -> LoadedImage:

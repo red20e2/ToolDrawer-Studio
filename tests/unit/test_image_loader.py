@@ -1,8 +1,12 @@
 from pathlib import Path
 
+import cv2
+import numpy as np
 import pytest
 
+import tooldrawer_studio.capture.image_loader as loader
 from tooldrawer_studio.capture.image_loader import load_image
+from tooldrawer_studio.domain.models import CaptureAsset
 
 
 def test_load_image_preserves_bytes_and_normalizes_bgr(simple_tools_image_path: Path):
@@ -23,3 +27,51 @@ def test_load_image_rejects_invalid_bytes(tmp_path: Path):
 
     with pytest.raises(ValueError, match="Unsupported or invalid image"):
         load_image(invalid, capture_id="capture-2")
+
+
+def test_load_image_rejects_oversized_file(monkeypatch):
+    monkeypatch.setattr(
+        Path,
+        "read_bytes",
+        lambda self: b"x" * (loader.MAX_IMAGE_BYTES + 1),
+    )
+
+    with pytest.raises(ValueError, match="too large"):
+        loader.load_image(Path("huge.jpg"), "capture-3")
+
+
+def test_decode_rejects_excessive_pixel_count(monkeypatch, tmp_path: Path):
+    pixels = np.zeros((20, 30, 3), dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", pixels)
+    assert ok
+    path = tmp_path / "image.png"
+    path.write_bytes(encoded.tobytes())
+    monkeypatch.setattr(loader, "MAX_IMAGE_PIXELS", 500)
+
+    with pytest.raises(ValueError, match="too large"):
+        loader.load_image(path, "capture-4")
+
+
+def test_normalized_png_bytes_encode_the_decoded_working_pixels():
+    working_pixels = np.zeros((20, 40, 3), dtype=np.uint8)
+    raw_pixels = np.zeros((40, 20, 3), dtype=np.uint8)
+    ok, raw_encoded = cv2.imencode(".png", raw_pixels)
+    assert ok
+    asset = CaptureAsset(
+        id="capture-normalized",
+        filename="source.jpg",
+        width_px=40,
+        height_px=20,
+        archive_path="images/capture-normalized.jpg",
+    )
+    loaded = loader.LoadedImage(
+        asset=asset,
+        pixels_bgr=working_pixels,
+        original_bytes=raw_encoded.tobytes(),
+    )
+
+    display_bytes = loader.normalized_png_bytes(loaded)
+    display = cv2.imdecode(np.frombuffer(display_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+    assert display is not None
+    assert display.shape[:2] == (20, 40)
