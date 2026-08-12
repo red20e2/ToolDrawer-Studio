@@ -3,9 +3,10 @@ name: Windows Tests
 on:
   pull_request:
     branches: [main]
-  push:
-    branches:
-      - feature/v0.1-foundation-vertical-slice
+
+concurrency:
+  group: windows-tests-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   test:
