@@ -4,7 +4,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
-from tooldrawer_studio.domain.models import Project
+from tooldrawer_studio.domain.models import Point2D, Project, ToolObject
 from tooldrawer_studio.layout.models import LayoutState, ToolPlacement
 from tooldrawer_studio.ui.arrange_panel import ArrangePanel
 
@@ -94,6 +94,46 @@ def test_set_state_renders_layout_defaults_selection_and_validation_status():
     assert "unplaced" in panel.status_label.text().lower()
     assert "review" in panel.status_label.text().lower()
     assert "boundary" in panel.validation_label.text().lower()
+    panel.close()
+
+
+def test_unplaced_tools_are_listed_by_name_for_actionable_partial_fit():
+    panel = ArrangePanel()
+    contour = [Point2D(0, 0), Point2D(20, 0), Point2D(20, 10), Point2D(0, 10)]
+    placed_tool = ToolObject(
+        id="tool-1",
+        name="Ratchet",
+        source_capture_id="capture-1",
+        base_contour_mm=list(contour),
+        contour_mm=list(contour),
+    )
+    unplaced_tool = ToolObject(
+        id="tool-2",
+        name="Long Breaker Bar",
+        source_capture_id="capture-1",
+        base_contour_mm=list(contour),
+        contour_mm=list(contour),
+    )
+    project = Project(id="p", name="P", tools=[placed_tool, unplaced_tool])
+    placement = ToolPlacement(tool_id="tool-1", x_mm=30.0, y_mm=30.0, is_placed=True)
+    layout = LayoutState(
+        mode="foam",
+        foam_width_mm=100.0,
+        foam_height_mm=80.0,
+        placements=[placement, ToolPlacement(tool_id="tool-2")],
+        unplaced_tool_ids=["tool-2"],
+    )
+
+    panel.set_state(
+        project,
+        layout,
+        placement,
+        placed_count=1,
+        total_count=2,
+    )
+
+    assert panel.unplaced_list.count() == 1
+    assert panel.unplaced_list.item(0).text() == "Long Breaker Bar"
     panel.close()
 
 
