@@ -165,9 +165,6 @@ def _project_from_dict(data: dict) -> Project:
                 ],
                 contour_mm=[_point_from_dict(point) for point in item["contour_mm"]],
                 clearance_mm=float(item.get("clearance_mm", 0.6)),
-                # Transitional value for pre-Measure UI code. It is not persisted
-                # as V2 state and will be removed when that UI is replaced.
-                depth_mm=5.0 if pocket_override is None else pocket_override,
                 trace_confidence=float(item.get("trace_confidence", 0.0)),
                 side_view_capture_id=(
                     None
