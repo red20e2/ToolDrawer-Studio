@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QListWidget,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -158,6 +159,11 @@ class ArrangePanel(QWidget):
         self.validation_label.setWordWrap(True)
         root.addWidget(self.status_label)
         root.addWidget(self.validation_label)
+        self.unplaced_label = QLabel("Unplaced tools")
+        root.addWidget(self.unplaced_label)
+        self.unplaced_list = QListWidget()
+        self.unplaced_list.setMaximumHeight(110)
+        root.addWidget(self.unplaced_list)
         root.addStretch()
 
         self.mode_combo.currentIndexChanged.connect(self._mode_changed)
@@ -350,9 +356,15 @@ class ArrangePanel(QWidget):
             else:
                 self.locked.setChecked(False)
 
-            unplaced = (
-                len(layout.unplaced_tool_ids) if layout is not None else total_count - placed_count
-            )
+            unplaced_ids = list(layout.unplaced_tool_ids) if layout is not None else []
+            tool_names = {tool.id: tool.name for tool in project.tools}
+            self.unplaced_list.clear()
+            for tool_id in unplaced_ids:
+                self.unplaced_list.addItem(tool_names.get(tool_id, tool_id))
+            self.unplaced_label.setVisible(bool(unplaced_ids))
+            self.unplaced_list.setVisible(bool(unplaced_ids))
+
+            unplaced = len(unplaced_ids) if layout is not None else total_count - placed_count
             parts = [f"Placed: {placed_count} / {total_count}"]
             if unplaced:
                 parts.append(f"Unplaced: {unplaced}")
