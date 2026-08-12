@@ -2,11 +2,52 @@
 
 ToolDrawer Studio is a pre-release, open-source Windows desktop application for turning calibrated photographs of tools into editable organizer geometry.
 
-The current V0.1 foundation includes the dimensional core: import a source photo, calibrate pixels to millimetres, trace one or more tool silhouettes, refine contours without destroying the base trace, save/reopen editable `.tds` projects, re-trace stored source images, generate a parametric pocket, and export STEP/STL/DXF manufacturing geometry.
+The current V0.1 foundation includes the dimensional core: import or capture source photos, calibrate pixels to millimetres, trace one or more tool silhouettes, refine contours without destroying the base trace, save/reopen editable `.tds` projects, re-trace stored source images, generate a parametric pocket, and export STEP/STL/DXF manufacturing geometry.
+
+## Capture workflow
+
+ToolDrawer Studio can receive images three ways:
+
+1. **Import Photo** - choose an existing image on the PC.
+2. **Webcam** - open the webcam panel, select an available camera, view the live preview, and press **Capture**.
+3. **Phone** - press **Start Phone Session**, scan the displayed QR code with a phone on the same local network, then use **Take Photo** or **Choose Existing Photo** in the phone browser.
+
+Phone and webcam captures enter one shared pending-capture tray. Pending images may be previewed, rotated in 90-degree steps, or deleted before they are added to a project. **Add to Project** promotes the selected orientation into the editable project without deleting that pending image or any other pending images.
+
+### Phone capture sessions
+
+Phone transfer is local-network-only. No cloud relay, account, or internet connection is required for the transfer itself.
+
+Each phone session:
+
+- creates a fresh temporary random token;
+- accepts multiple photos while active;
+- binds only to an RFC1918 private IPv4 address (`10.x.x.x`, `172.16-31.x.x`, or `192.168.x.x`);
+- fails closed if the PC does not have a suitable private IPv4 address;
+- stops if the bound private address disappears;
+- stops when **Stop Phone Session** is pressed;
+- also stops after **30 minutes of inactivity**.
+
+Only an authenticated phone-page load or a successfully accepted image refreshes the inactivity timer. Invalid tokens, malformed requests, rejected images, and unrelated traffic do not keep the session alive. Stopping, expiring, or replacing a session invalidates its old token and QR URL.
+
+The upload endpoint accepts images only and never exposes project files, arbitrary folders, shell commands, or a general-purpose file server. The phone page is served directly by ToolDrawer Studio and does not load remote JavaScript, stylesheets, fonts, or analytics.
+
+### Pending-capture limits
+
+All captured/uploaded images use the same validation path as imported source images:
+
+- maximum source size: **50 MB**;
+- maximum decoded image size: **40 megapixels**.
+
+Corrupt, unsupported, oversized, incomplete, or non-image uploads are rejected before entering the pending tray.
+
+Pending tray contents are temporary application-session data in V0.1. Once **Add to Project** is used, that promoted capture becomes normal persistent `.tds` project data. Unpromoted pending images are not restored after an application restart or crash.
+
+Special HEIC/HEIF codec installation is not part of this capture slice. Images already supported by the installed OpenCV image stack continue to work normally.
 
 ## Calibration workflow
 
-The calibration screen works directly on the imported photo. Clicked points are stored in native image-pixel coordinates; all downstream geometry is converted to millimetres through the active calibration transform.
+The calibration screen works directly on the imported or promoted photo. Clicked points are stored in native image-pixel coordinates; all downstream geometry is converted to millimetres through the active calibration transform.
 
 Five calibration modes are available:
 

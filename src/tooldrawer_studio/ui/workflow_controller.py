@@ -18,6 +18,7 @@ from tooldrawer_studio.capture.image_loader import (
     LoadedImage,
     load_image,
     load_image_bytes,
+    load_new_image_bytes,
     normalized_png_bytes,
 )
 from tooldrawer_studio.domain.models import CalibrationRecord, Point2D, Project, ToolObject
@@ -57,15 +58,24 @@ class WorkflowController:
     def active_image_display_bytes(self) -> bytes:
         return normalized_png_bytes(self._require_active_image())
 
-    def import_image(self, path: Path) -> str:
-        capture_id = str(uuid4())
-        loaded = load_image(path, capture_id)
+    def _store_loaded_image(self, loaded: LoadedImage) -> str:
+        capture_id = loaded.asset.id
         self.project.captures.append(loaded.asset)
         self.bundle.image_bytes[capture_id] = loaded.original_bytes
         self._loaded_images[capture_id] = loaded
         self._active_capture_id = capture_id
         self._active_calibration = None
         return capture_id
+
+    def import_image(self, path: Path) -> str:
+        capture_id = str(uuid4())
+        return self._store_loaded_image(load_image(path, capture_id))
+
+    def import_image_bytes(self, raw: bytes, filename: str) -> str:
+        capture_id = str(uuid4())
+        return self._store_loaded_image(
+            load_new_image_bytes(raw, filename, capture_id)
+        )
 
     def _require_active_capture_id(self) -> str:
         if self._active_capture_id is None:

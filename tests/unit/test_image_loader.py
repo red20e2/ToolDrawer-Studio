@@ -75,3 +75,43 @@ def test_normalized_png_bytes_encode_the_decoded_working_pixels():
 
     assert display is not None
     assert display.shape[:2] == (20, 40)
+
+
+def test_load_new_image_bytes_builds_asset_from_decoded_pixels():
+    pixels = np.zeros((18, 31, 3), dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", pixels)
+    assert ok
+
+    loaded = loader.load_new_image_bytes(encoded.tobytes(), "phone.png", "capture-new")
+
+    assert loaded.asset.id == "capture-new"
+    assert loaded.asset.filename == "phone.png"
+    assert loaded.asset.archive_path == "images/capture-new.png"
+    assert (loaded.asset.width_px, loaded.asset.height_px) == (31, 18)
+
+
+def test_load_new_image_bytes_reuses_invalid_image_validation():
+    with pytest.raises(ValueError, match="Unsupported or invalid image"):
+        loader.load_new_image_bytes(b"not-an-image", "bad.jpg", "capture-new")
+
+
+def test_rotated_png_bytes_rotates_clockwise():
+    working_pixels = np.zeros((12, 30, 3), dtype=np.uint8)
+    working_pixels[:, :5] = (255, 255, 255)
+    ok, encoded = cv2.imencode(".png", working_pixels)
+    assert ok
+    asset = CaptureAsset(
+        id="capture-rotate",
+        filename="source.png",
+        width_px=30,
+        height_px=12,
+        archive_path="images/capture-rotate.png",
+    )
+    loaded = loader.LoadedImage(asset, working_pixels, encoded.tobytes())
+
+    rotated = loader.rotated_png_bytes(loaded, 1)
+    decoded = cv2.imdecode(np.frombuffer(rotated, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+    assert decoded is not None
+    assert decoded.shape[:2] == (30, 12)
+    assert np.all(decoded[:5, :] == 255)
