@@ -14,7 +14,12 @@ from tooldrawer_studio.calibration.target import (
     CalibrationTargetSpec,
     calibrate_target as solve_target,
 )
-from tooldrawer_studio.capture.image_loader import LoadedImage, load_image, load_image_bytes
+from tooldrawer_studio.capture.image_loader import (
+    LoadedImage,
+    load_image,
+    load_image_bytes,
+    normalized_png_bytes,
+)
 from tooldrawer_studio.domain.models import CalibrationRecord, Point2D, Project, ToolObject
 from tooldrawer_studio.export.service import ExportPaths, export_tool_package
 from tooldrawer_studio.geometry.contour import replace_tool_contour, reset_tool_contour
@@ -48,6 +53,9 @@ class WorkflowController:
     @property
     def active_capture_id(self) -> str | None:
         return self._active_capture_id
+
+    def active_image_display_bytes(self) -> bytes:
+        return normalized_png_bytes(self._require_active_image())
 
     def import_image(self, path: Path) -> str:
         capture_id = str(uuid4())
