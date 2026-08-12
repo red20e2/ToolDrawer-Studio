@@ -6,6 +6,7 @@ import pytest
 
 import tooldrawer_studio.capture.image_loader as loader
 from tooldrawer_studio.capture.image_loader import load_image
+from tooldrawer_studio.domain.models import CaptureAsset
 
 
 def test_load_image_preserves_bytes_and_normalizes_bgr(simple_tools_image_path: Path):
@@ -49,3 +50,28 @@ def test_decode_rejects_excessive_pixel_count(monkeypatch, tmp_path: Path):
 
     with pytest.raises(ValueError, match="too large"):
         loader.load_image(path, "capture-4")
+
+
+def test_normalized_png_bytes_encode_the_decoded_working_pixels():
+    working_pixels = np.zeros((20, 40, 3), dtype=np.uint8)
+    raw_pixels = np.zeros((40, 20, 3), dtype=np.uint8)
+    ok, raw_encoded = cv2.imencode(".png", raw_pixels)
+    assert ok
+    asset = CaptureAsset(
+        id="capture-normalized",
+        filename="source.jpg",
+        width_px=40,
+        height_px=20,
+        archive_path="images/capture-normalized.jpg",
+    )
+    loaded = loader.LoadedImage(
+        asset=asset,
+        pixels_bgr=working_pixels,
+        original_bytes=raw_encoded.tobytes(),
+    )
+
+    display_bytes = loader.normalized_png_bytes(loaded)
+    display = cv2.imdecode(np.frombuffer(display_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+
+    assert display is not None
+    assert display.shape[:2] == (20, 40)
