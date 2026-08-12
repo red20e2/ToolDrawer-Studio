@@ -301,6 +301,12 @@ class MainWindow(QMainWindow):
             self.low_confidence_override.setChecked(False)
         self.tabs.setTabEnabled(1, True)
 
+    def _advance_after_calibration(self, record: CalibrationRecord) -> None:
+        if record.confidence >= MIN_AUTOMATIC_TRACE_CALIBRATION_CONFIDENCE:
+            self.tabs.setCurrentIndex(1)
+        else:
+            self.tabs.setCurrentIndex(0)
+
     def _import_photo(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
             self,
@@ -349,7 +355,7 @@ class MainWindow(QMainWindow):
             else:
                 raise ValueError("Use Detect Target for printable-target calibration")
             self._update_calibration_status(record)
-            self.tabs.setCurrentIndex(1)
+            self._advance_after_calibration(record)
         except Exception as exc:
             self._show_error(exc)
 
@@ -376,7 +382,7 @@ class MainWindow(QMainWindow):
         try:
             record = self.controller.calibrate_target(self._target_spec())
             self._update_calibration_status(record)
-            self.tabs.setCurrentIndex(1)
+            self._advance_after_calibration(record)
         except Exception as exc:
             self._show_error(exc)
 
