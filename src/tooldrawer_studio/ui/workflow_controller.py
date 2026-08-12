@@ -60,7 +60,9 @@ def _validate_positive(value: float, label: str) -> float:
 
 
 class WorkflowController:
-    def __init__(self) -> None:
+    def __init__(
+        self, measurement_service: ThicknessMeasurementService | None = None
+    ) -> None:
         project = Project(id=str(uuid4()), name="Untitled Project")
         self.bundle = ProjectBundle(project=project, image_bytes={})
         self._loaded_images: dict[str, LoadedImage] = {}
@@ -68,6 +70,7 @@ class WorkflowController:
         self._active_calibration: CalibrationRecord | None = None
         self._selected_tool_id: str | None = None
         self._pocket_spec: PocketSpec | None = None
+        self._measurement_service = measurement_service or ThicknessMeasurementService()
 
     @property
     def project(self) -> Project:
@@ -159,11 +162,13 @@ class WorkflowController:
         if capture_id != record.capture_id:
             raise ValueError("Calibration does not belong to the active capture")
 
+        side_tools = [
+            tool for tool in self.project.tools if tool.side_view_capture_id == capture_id
+        ]
         replacing_existing = self.calibration_for_capture(capture_id) is not None
         if replacing_existing:
-            for tool in self.project.tools:
-                if tool.side_view_capture_id == capture_id:
-                    self._invalidate_image_derived_thickness(tool)
+            for tool in side_tools:
+                self._invalidate_image_derived_thickness(tool)
 
         self.project.calibrations = [
             existing
@@ -172,6 +177,14 @@ class WorkflowController:
         ]
         self.project.calibrations.append(record)
         self._active_calibration = record
+
+        if self._selected_tool_id is not None:
+            selected = self.project.tools[self._tool_index(self._selected_tool_id)]
+            if (
+                selected.side_view_capture_id == capture_id
+                and selected.source_capture_id in self._loaded_images
+            ):
+                self.activate_capture(selected.source_capture_id)
         return record
 
     def calibrate_known_distance(
@@ -300,6 +313,8 @@ class WorkflowController:
                 self._invalidate_image_derived_thickness(tool)
             tool.side_view_capture_id = capture_id
             self._pocket_spec = None
+        if tool.source_capture_id in self._loaded_images:
+            self.activate_capture(tool.source_capture_id)
         return tool
 
     def _side_view_context(
@@ -319,7 +334,7 @@ class WorkflowController:
 
     def measure_tool_thickness(self, tool_id: str) -> ThicknessMeasurementResult:
         tool, image, calibration = self._side_view_context(tool_id)
-        result = ThicknessMeasurementService().measure(image.pixels_bgr, calibration)
+        result = self._measurement_service.measure(image.pixels_bgr, calibration)
 
         tool.automatic_thickness_mm = result.automatic_thickness_mm
         tool.automatic_thickness_confidence = result.confidence
@@ -476,8 +491,12 @@ class WorkflowController:
         save_project(self.bundle, path)
 
     @classmethod
-    def open(cls, path: Path) -> "WorkflowController":
-        controller = cls()
+    def open(
+        cls,
+        path: Path,
+        measurement_service: ThicknessMeasurementService | None = None,
+    ) -> "WorkflowController":
+        controller = cls(measurement_service=measurement_service)
         controller.bundle = load_project(path)
         controller._loaded_images = {
             capture.id: load_image_bytes(
