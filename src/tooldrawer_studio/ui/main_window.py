@@ -368,6 +368,9 @@ class MainWindow(QMainWindow):
         self.arrangement_view.placementsCommitted.connect(
             self._arrange_placements_committed
         )
+        self.arrangement_view.selectionChanged.connect(
+            self._arrange_selection_changed
+        )
 
     def _show_error(self, exc: Exception) -> None:
         QMessageBox.critical(self, "ToolDrawer Studio", str(exc))
@@ -825,6 +828,16 @@ class MainWindow(QMainWindow):
             total_count=len(project.tools),
             validation_messages=[issue.message for issue in validation.issues],
         )
+
+    def _arrange_selection_changed(self, selected: object) -> None:
+        try:
+            if not isinstance(selected, set) or len(selected) != 1:
+                return
+            tool_id = str(next(iter(selected)))
+            self.controller.select_tool(tool_id)
+            self._refresh_arrange_state(sync_view=False)
+        except Exception as exc:
+            self._show_error(exc)
 
     def _arrange_layout_requested(self, payload: object) -> None:
         try:
