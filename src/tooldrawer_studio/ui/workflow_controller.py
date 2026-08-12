@@ -361,6 +361,8 @@ class WorkflowController:
     def accept_automatic_thickness(self, tool_id: str) -> ToolObject:
         tool = self.project.tools[self._tool_index(tool_id)]
         tool.accepted_thickness_mm = self._require_automatic_thickness(tool)
+        tool.corrected_thickness_endpoint_a_px = None
+        tool.corrected_thickness_endpoint_b_px = None
         tool.thickness_measurement_mode = "automatic"
         tool.thickness_accepted = True
         tool.thickness_review_required = False
