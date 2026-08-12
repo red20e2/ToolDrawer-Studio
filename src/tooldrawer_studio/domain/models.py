@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from tooldrawer_studio.measurement.models import ImagePoint
+
+if TYPE_CHECKING:
+    from tooldrawer_studio.layout.models import LayoutState
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,9 +68,15 @@ class ToolObject:
 class Project:
     id: str
     name: str
-    schema_version: int = 2
+    schema_version: int = 3
     captures: list[CaptureAsset] = field(default_factory=list)
     calibrations: list[CalibrationRecord] = field(default_factory=list)
     tools: list[ToolObject] = field(default_factory=list)
     default_exposed_height_mm: float = 4.0
     default_bottom_clearance_mm: float = 0.8
+    default_layout_spacing_mm: float = 3.0
+    default_layout_border_mm: float = 4.0
+    default_grab_clearance_mm: float = 12.0
+    default_snap_increment_mm: float = 1.0
+    gridfinity_pitch_mm: float = 42.0
+    layout: LayoutState | None = None
