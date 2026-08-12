@@ -186,16 +186,42 @@ def grab_exclusion_polygon(
     spacing_mm: float,
     default_grab_clearance_mm: float,
 ) -> BaseGeometry:
-    """Return the legacy combined search envelope used by packing previews.
+    """Return the combined spacing/grab search envelope used by packing previews.
 
-    Exact validity is evaluated from cavity spacing and grab access separately.
+    This intentionally preserves the historical preview/search semantics: the
+    requested grab clearance extends from the already spacing-expanded local
+    envelope. Exact validity is evaluated separately from cleared cavities and
+    exact grab-access strips.
     """
 
-    normal = spacing_exclusion_polygon(tool, placement, spacing_mm)
-    grab = grab_access_polygon(tool, placement, default_grab_clearance_mm)
-    if grab.is_empty:
-        return normal
-    return unary_union((normal, grab))
+    spacing = _finite_nonnegative(spacing_mm, "spacing_mm")
+    local_normal: BaseGeometry = _local_cavity_polygon(tool)
+    if spacing > 0.0:
+        local_normal = _largest_valid_polygon(local_normal.buffer(spacing / 2.0))
+
+    if placement.grab_side == "none":
+        return _place_local_geometry(local_normal, placement)
+
+    requested = (
+        placement.grab_clearance_override_mm
+        if placement.grab_clearance_override_mm is not None
+        else default_grab_clearance_mm
+    )
+    clearance = _finite_nonnegative(requested, "grab_clearance_mm")
+    if clearance <= 0.0:
+        return _place_local_geometry(local_normal, placement)
+
+    minx, miny, maxx, maxy = local_normal.bounds
+    if placement.grab_side == "right":
+        extra = box(maxx, miny, maxx + clearance, maxy)
+    elif placement.grab_side == "left":
+        extra = box(minx - clearance, miny, minx, maxy)
+    elif placement.grab_side == "top":
+        extra = box(minx, maxy, maxx, maxy + clearance)
+    else:  # bottom
+        extra = box(minx, miny - clearance, maxx, miny)
+
+    return _place_local_geometry(unary_union((local_normal, extra)), placement)
 
 
 def candidate_exclusion_geometry(
