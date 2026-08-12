@@ -283,17 +283,12 @@ class WorkflowController:
         tool_id: str,
         *,
         clearance_mm: float | None = None,
-        depth_mm: float | None = None,
     ) -> ToolObject:
         tool = self.project.tools[self._tool_index(tool_id)]
         if clearance_mm is not None:
             if clearance_mm < 0:
                 raise ValueError("Tool clearance must be non-negative")
             tool.clearance_mm = float(clearance_mm)
-        if depth_mm is not None:
-            if depth_mm <= 0:
-                raise ValueError("Tool depth must be positive")
-            tool.depth_mm = float(depth_mm)
         return tool
 
     def attach_side_view(self, tool_id: str, capture_id: str) -> ToolObject:
@@ -513,13 +508,18 @@ class WorkflowController:
         base_width_mm: float,
         base_height_mm: float,
         base_thickness_mm: float,
-        pocket_depth_mm: float,
+        pocket_depth_mm: float | None = None,
     ) -> None:
+        if pocket_depth_mm is None:
+            tool = self.selected_tool()
+            pocket_depth_mm = self.resolved_pocket_depth(tool.id)
+            if pocket_depth_mm is None:
+                raise ValueError("Selected tool has no resolved pocket depth")
         self._pocket_spec = PocketSpec(
             base_width_mm=base_width_mm,
             base_height_mm=base_height_mm,
             base_thickness_mm=base_thickness_mm,
-            pocket_depth_mm=pocket_depth_mm,
+            pocket_depth_mm=float(pocket_depth_mm),
         )
 
     def export_selected_tool(self, directory: Path) -> ExportPaths:
