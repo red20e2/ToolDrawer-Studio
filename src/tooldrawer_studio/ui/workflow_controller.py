@@ -3,7 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
-from tooldrawer_studio.calibration.service import PixelPoint, calibrate_known_distance
+from tooldrawer_studio.calibration.presets import PaperPreset
+from tooldrawer_studio.calibration.service import (
+    PixelPoint,
+    calibrate_known_distance as solve_known_distance,
+    calibrate_known_object as solve_known_object,
+    calibrate_paper as solve_paper,
+)
+from tooldrawer_studio.calibration.target import (
+    CalibrationTargetSpec,
+    calibrate_target as solve_target,
+)
 from tooldrawer_studio.capture.image_loader import LoadedImage, load_image, load_image_bytes
 from tooldrawer_studio.domain.models import CalibrationRecord, Point2D, Project, ToolObject
 from tooldrawer_studio.export.service import ExportPaths, export_tool_package
@@ -12,6 +22,9 @@ from tooldrawer_studio.geometry.pocket import PocketSpec, build_pocket_insert
 from tooldrawer_studio.persistence.project_archive import ProjectBundle, load_project, save_project
 from tooldrawer_studio.tracing.models import TraceConfig
 from tooldrawer_studio.tracing.opencv_tracer import OpenCVTracer
+
+
+MIN_AUTOMATIC_TRACE_CALIBRATION_CONFIDENCE = 0.75
 
 
 class WorkflowController:
@@ -46,34 +59,81 @@ class WorkflowController:
         self._active_calibration = None
         return capture_id
 
+    def _require_active_capture_id(self) -> str:
+        if self._active_capture_id is None:
+            raise ValueError("Import an image before calibrating")
+        return self._active_capture_id
+
+    def _require_active_image(self) -> LoadedImage:
+        capture_id = self._require_active_capture_id()
+        image = self._loaded_images.get(capture_id)
+        if image is None:
+            raise ValueError("The active source image is not decoded")
+        return image
+
+    def _store_active_calibration(self, record: CalibrationRecord) -> CalibrationRecord:
+        capture_id = self._require_active_capture_id()
+        if capture_id != record.capture_id:
+            raise ValueError("Calibration does not belong to the active capture")
+        self.project.calibrations = [
+            existing
+            for existing in self.project.calibrations
+            if existing.capture_id != record.capture_id
+        ]
+        self.project.calibrations.append(record)
+        self._active_calibration = record
+        return record
+
     def calibrate_known_distance(
         self,
         pixel_a: PixelPoint,
         pixel_b: PixelPoint,
         known_distance_mm: float,
     ) -> CalibrationRecord:
-        if self._active_capture_id is None:
-            raise ValueError("Import an image before calibrating")
-        record = calibrate_known_distance(
-            self._active_capture_id, pixel_a, pixel_b, known_distance_mm
+        capture_id = self._require_active_capture_id()
+        return self._store_active_calibration(
+            solve_known_distance(capture_id, pixel_a, pixel_b, known_distance_mm)
         )
-        self.project.calibrations = [
-            calibration
-            for calibration in self.project.calibrations
-            if not (
-                calibration.capture_id == self._active_capture_id
-                and calibration.method == "known_distance"
-            )
-        ]
-        self.project.calibrations.append(record)
-        self._active_calibration = record
-        return record
 
-    def trace_tools(self) -> list[ToolObject]:
+    def calibrate_paper(
+        self,
+        corners_px: tuple[PixelPoint, PixelPoint, PixelPoint, PixelPoint],
+        preset: PaperPreset,
+    ) -> CalibrationRecord:
+        capture_id = self._require_active_capture_id()
+        return self._store_active_calibration(
+            solve_paper(capture_id, corners_px, preset)
+        )
+
+    def calibrate_known_object(
+        self,
+        corners_px: tuple[PixelPoint, PixelPoint, PixelPoint, PixelPoint],
+        width_mm: float,
+        height_mm: float,
+    ) -> CalibrationRecord:
+        capture_id = self._require_active_capture_id()
+        return self._store_active_calibration(
+            solve_known_object(capture_id, corners_px, width_mm, height_mm)
+        )
+
+    def calibrate_target(self, spec: CalibrationTargetSpec) -> CalibrationRecord:
+        capture_id = self._require_active_capture_id()
+        image = self._require_active_image()
+        return self._store_active_calibration(solve_target(capture_id, image, spec))
+
+    def trace_tools(
+        self, *, allow_low_confidence: bool = False
+    ) -> list[ToolObject]:
         if self._active_capture_id is None:
             raise ValueError("Import an image before tracing")
         if self._active_calibration is None:
             raise ValueError("Calibrate the active image before tracing")
+        if (
+            self._active_calibration.confidence
+            < MIN_AUTOMATIC_TRACE_CALIBRATION_CONFIDENCE
+            and not allow_low_confidence
+        ):
+            raise ValueError("Calibration confidence is too low for automatic tracing")
         image = self._loaded_images.get(self._active_capture_id)
         if image is None:
             raise ValueError("The active source image is not decoded")
