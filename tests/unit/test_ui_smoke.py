@@ -45,6 +45,8 @@ def test_main_window_constructs_with_five_workflow_stages():
     assert window.calibration_mode.itemText(4) == "Printable target"
     assert window.low_confidence_override.isHidden()
     assert not hasattr(window, "tool_depth")
+    assert not hasattr(window, "pocket_depth")
+    assert window.pocket_depth_label.text() == "No resolved pocket depth"
     window.close()
     assert app is not None
 
