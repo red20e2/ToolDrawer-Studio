@@ -12,6 +12,7 @@ dependencies = [
   "numpy>=2,<3",
   "opencv-python>=4,<5",
   "cadquery>=2,<3",
+  "qrcode>=8,<9",
 ]
 
 [project.optional-dependencies]
