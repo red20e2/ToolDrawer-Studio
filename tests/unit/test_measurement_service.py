@@ -48,6 +48,27 @@ def test_tapered_profile_uses_maximum_cross_section():
     assert result.automatic_thickness_mm == pytest.approx(25.0, abs=1.0)
 
 
+def test_boundary_touching_profile_lowers_confidence_and_warns():
+    image = np.full((220, 420, 3), 245, dtype=np.uint8)
+    cv2.rectangle(image, (0, 90), (300, 130), (20, 20, 20), -1)
+
+    result = ThicknessMeasurementService().measure(image, _calibration())
+
+    assert result.confidence < MIN_AUTOMATIC_THICKNESS_CONFIDENCE
+    assert "silhouette touches image boundary" in result.warnings
+
+
+def test_multiple_similar_profiles_lower_confidence_and_warn():
+    image = np.full((220, 420, 3), 245, dtype=np.uint8)
+    cv2.rectangle(image, (60, 90), (180, 130), (20, 20, 20), -1)
+    cv2.rectangle(image, (240, 90), (360, 130), (20, 20, 20), -1)
+
+    result = ThicknessMeasurementService().measure(image, _calibration())
+
+    assert result.confidence < MIN_AUTOMATIC_THICKNESS_CONFIDENCE
+    assert "multiple plausible silhouettes" in result.warnings
+
+
 def test_low_contrast_profile_is_not_auto_accept_quality():
     image = np.full((220, 420, 3), 130, dtype=np.uint8)
     cv2.rectangle(image, (80, 90), (340, 130), (110, 110, 110), -1)
