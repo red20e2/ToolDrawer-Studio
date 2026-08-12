@@ -18,7 +18,7 @@ def _add_tool(window: MainWindow, tool_id: str = "tool-1") -> ToolObject:
     contour = [Point2D(0, 0), Point2D(25, 0), Point2D(25, 12), Point2D(0, 12)]
     tool = ToolObject(
         id=tool_id,
-        name="Ratchet",
+        name=tool_id,
         source_capture_id="capture-1",
         base_contour_mm=list(contour),
         contour_mm=list(contour),
@@ -104,4 +104,19 @@ def test_selected_tool_layout_options_are_wired_from_panel():
     assert placement.rotation_policy == "orthogonal"
     assert placement.grab_side == "right"
     assert placement.locked is True
+    window.close()
+
+
+def test_single_canvas_selection_becomes_active_tool_for_arrange_controls():
+    window = MainWindow()
+    first = _add_tool(window, "tool-1")
+    second = _add_tool(window, "tool-2")
+    window.controller.select_tool(first.id)
+    window._arrange_layout_requested(("foam", 180.0, 120.0))
+    window._arrange_auto()
+
+    window.arrangement_view.set_selected_tool_ids({second.id})
+
+    assert window.controller.selected_tool().id == second.id
+    assert window.arrange_panel.rotation_value.value() == window.controller.project.layout.placement_for(second.id).rotation_deg
     window.close()
