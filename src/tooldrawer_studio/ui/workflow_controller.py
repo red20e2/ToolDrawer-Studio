@@ -162,13 +162,11 @@ class WorkflowController:
         if capture_id != record.capture_id:
             raise ValueError("Calibration does not belong to the active capture")
 
-        side_tools = [
-            tool for tool in self.project.tools if tool.side_view_capture_id == capture_id
-        ]
         replacing_existing = self.calibration_for_capture(capture_id) is not None
         if replacing_existing:
-            for tool in side_tools:
-                self._invalidate_image_derived_thickness(tool)
+            for tool in self.project.tools:
+                if tool.side_view_capture_id == capture_id:
+                    self._invalidate_image_derived_thickness(tool)
 
         self.project.calibrations = [
             existing
@@ -177,14 +175,6 @@ class WorkflowController:
         ]
         self.project.calibrations.append(record)
         self._active_calibration = record
-
-        if self._selected_tool_id is not None:
-            selected = self.project.tools[self._tool_index(self._selected_tool_id)]
-            if (
-                selected.side_view_capture_id == capture_id
-                and selected.source_capture_id in self._loaded_images
-            ):
-                self.activate_capture(selected.source_capture_id)
         return record
 
     def calibrate_known_distance(
@@ -313,8 +303,6 @@ class WorkflowController:
                 self._invalidate_image_derived_thickness(tool)
             tool.side_view_capture_id = capture_id
             self._pocket_spec = None
-        if tool.source_capture_id in self._loaded_images:
-            self.activate_capture(tool.source_capture_id)
         return tool
 
     def _side_view_context(
