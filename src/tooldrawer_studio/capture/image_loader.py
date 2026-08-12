@@ -41,6 +41,14 @@ def _decode_pixels(raw: bytes, description: str) -> np.ndarray:
     return pixels
 
 
+def normalized_png_bytes(image: LoadedImage) -> bytes:
+    """Encode the normalized working pixels for a calibration/display view."""
+    ok, encoded = cv2.imencode(".png", image.pixels_bgr)
+    if not ok:
+        raise ValueError("Could not encode normalized image for display")
+    return encoded.tobytes()
+
+
 def load_image(path: Path, capture_id: str) -> LoadedImage:
     raw = path.read_bytes()
     pixels = _decode_pixels(raw, str(path))
