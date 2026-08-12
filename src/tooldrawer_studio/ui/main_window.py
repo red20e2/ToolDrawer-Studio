@@ -274,11 +274,11 @@ class MainWindow(QMainWindow):
         self.base_width = self._number(1, 2000, 300)
         self.base_height = self._number(1, 2000, 200)
         self.base_thickness = self._number(0.1, 200, 10)
-        self.pocket_depth = self._number(0.01, 199, 5)
+        self.pocket_depth_label = QLabel("No resolved pocket depth")
         form.addRow("Base width", self.base_width)
         form.addRow("Base height", self.base_height)
         form.addRow("Base thickness", self.base_thickness)
-        form.addRow("Pocket depth", self.pocket_depth)
+        form.addRow("Pocket depth", self.pocket_depth_label)
         layout.addLayout(form)
         button = QPushButton("Apply Pocket Settings")
         button.clicked.connect(self._configure_pocket)
@@ -705,6 +705,11 @@ class MainWindow(QMainWindow):
             warnings=warnings,
         )
 
+        if final is None:
+            self.pocket_depth_label.setText("No resolved pocket depth")
+        else:
+            self.pocket_depth_label.setText(f"{final:.3f} mm (from Measure)")
+
         if tool.side_view_capture_id is not None:
             self.measure_panel.measurement_view.set_image_bytes(
                 self.controller.capture_display_bytes(tool.side_view_capture_id)
@@ -877,7 +882,7 @@ class MainWindow(QMainWindow):
                 self.base_width.value(),
                 self.base_height.value(),
                 self.base_thickness.value(),
-                self.pocket_depth.value(),
+                pocket_depth_mm=None,
             )
             self.pocket_status.setText("Pocket settings applied")
             self.tabs.setTabEnabled(4, True)
@@ -970,7 +975,7 @@ class MainWindow(QMainWindow):
                 self.base_width.value(),
                 self.base_height.value(),
                 self.base_thickness.value(),
-                self.pocket_depth.value(),
+                pocket_depth_mm=None,
             )
             paths = self.controller.export_selected_tool(Path(directory))
             self.export_status.setText(
