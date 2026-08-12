@@ -175,3 +175,70 @@ def test_restricted_large_tool_is_packed_before_flexible_small_tool():
 
     assert ordered[0].id == "restricted"
     assert ordered[1].id == "flexible"
+
+
+def test_packer_structural_spacing_does_not_shrink_outer_boundary():
+    packer = _packer()
+    tool = _tool("exact-fit", 20.0, 10.0)
+    layout = LayoutState(
+        mode="foam",
+        foam_width_mm=28.0,
+        foam_height_mm=18.0,
+        border_mm=4.0,
+        spacing_mm=4.0,
+        placements=[
+            ToolPlacement(
+                tool_id=tool.id,
+                rotation_policy="fixed",
+                is_placed=False,
+            )
+        ],
+    )
+    project = Project(id="p", name="P", tools=[tool], layout=layout)
+
+    result = packer.pack_layout(project, layout)
+
+    assert result.placements[0].is_placed is True
+    assert result.unplaced_tool_ids == ()
+    assert result.validation.valid is True
+
+
+def test_packer_allows_opposing_grab_zones_to_share_empty_space():
+    packer = _packer()
+    left_tool = _tool("left", 20.0, 10.0)
+    right_tool = _tool("right", 20.0, 10.0)
+    layout = LayoutState(
+        mode="foam",
+        foam_width_mm=58.0,
+        foam_height_mm=18.0,
+        border_mm=4.0,
+        spacing_mm=0.0,
+        placements=[
+            ToolPlacement(
+                tool_id="left",
+                rotation_policy="fixed",
+                grab_side="right",
+                grab_clearance_override_mm=10.0,
+                is_placed=False,
+            ),
+            ToolPlacement(
+                tool_id="right",
+                rotation_policy="fixed",
+                grab_side="left",
+                grab_clearance_override_mm=10.0,
+                is_placed=False,
+            ),
+        ],
+    )
+    project = Project(
+        id="p",
+        name="P",
+        tools=[left_tool, right_tool],
+        layout=layout,
+    )
+
+    result = packer.pack_layout(project, layout)
+
+    assert all(placement.is_placed for placement in result.placements)
+    assert result.unplaced_tool_ids == ()
+    assert result.validation.valid is True
