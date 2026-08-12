@@ -2,7 +2,7 @@
 
 ToolDrawer Studio is a pre-release, open-source Windows desktop application for turning calibrated photographs of tools into editable organizer geometry.
 
-The current V0.1 foundation includes the dimensional core: import or capture source photos, calibrate pixels to millimetres, trace one or more tool silhouettes, refine contours without destroying the base trace, save/reopen editable `.tds` projects, re-trace stored source images, generate a parametric pocket, and export STEP/STL/DXF manufacturing geometry.
+The current V0.1 foundation includes the dimensional core: import or capture source photos, calibrate pixels to millimetres, trace one or more tool silhouettes, refine contours without destroying the base trace, measure physical tool thickness from an independently calibrated side view, derive a pocket-depth suggestion, save/reopen editable `.tds` projects, generate a parametric pocket, and export STEP/STL/DXF manufacturing geometry.
 
 ## Capture workflow
 
@@ -68,6 +68,44 @@ A photographed target is a manufacturing aid, not a metrology instrument. Camera
 Calibration confidence is displayed after calibration. Automatic tracing requires confidence of at least **75%** by default. If confidence is lower, ToolDrawer Studio shows an explicit **Allow low-confidence automatic tracing** override instead of silently treating uncertain dimensions as precise.
 
 Using a larger reference in the photo generally produces better dimensional confidence than measuring a very short pixel span. A4/Letter, a large known object, or the printable target are preferred when practical.
+
+## Measure / thickness workflow
+
+The **Measure** stage keeps physical tool thickness separate from manufacturing pocket depth.
+
+For each traced tool, attach one side-view capture. The side view must be calibrated independently from the top-view image; ToolDrawer Studio never reuses another photo's pixel scale. A pending phone/webcam capture can be selected as a side view without consuming or deleting it from the pending tray.
+
+After side-view calibration, **Measure Automatically** uses deterministic local OpenCV image analysis to estimate the tool's maximum calibrated thickness. The automatic source value, confidence, measurement endpoints, silhouette, and any warning state are stored in the editable project.
+
+Automatic thickness confidence uses an **80%** acceptance threshold:
+
+- at or above 80%, the result may become the accepted thickness automatically when no exact manual thickness already has precedence;
+- below 80%, the automatic result is shown for review but cannot drive the pocket-depth suggestion until it is explicitly accepted or corrected.
+
+Manual correction remains available even when automatic silhouette detection fails. You can place or drag two measurement endpoints on the calibrated side image, or enter an exact physical thickness directly. An exact manual thickness takes precedence over later automatic remeasurement while the automatic source result is still preserved separately.
+
+### Pocket-depth suggestion
+
+Project defaults are:
+
+- desired exposed height: **4.0 mm**;
+- bottom clearance: **0.8 mm**.
+
+Each tool can override either value independently. The suggested manufacturing depth is:
+
+```text
+accepted tool thickness - desired exposed height + bottom clearance
+```
+
+For example, an 18.0 mm tool using the default 4.0 mm exposed height and 0.8 mm bottom clearance produces a 14.8 mm suggested pocket depth.
+
+The suggested depth and final manufacturing depth are separate. You can explicitly override final pocket depth; that explicit override is never silently replaced by a later side-view measurement. Pocket generation and STEP/STL/DXF export use the resolved final depth from the Measure stage.
+
+Replacing or recalibrating a side-view image invalidates image-derived automatic/endpoint measurements. Exact manual thickness and explicit final pocket-depth overrides are preserved and flagged for review rather than silently discarded.
+
+`.tds` schema V2 stores side-view associations, calibrations, measurement geometry, confidence, accepted/manual values, project defaults, per-tool overrides, and final pocket-depth state. Existing V1 projects migrate non-destructively: the old `depth_mm` value is preserved exactly as the V2 explicit pocket-depth override. Reopening a project restores saved Measure state without automatically rerunning image analysis.
+
+Photo-derived measurements remain manufacturing aids rather than metrology-grade inspection data. Focus, lens distortion, calibration quality, shadows, reflections, silhouette ambiguity, and image resolution can all affect accuracy.
 
 ## Image import safety
 
