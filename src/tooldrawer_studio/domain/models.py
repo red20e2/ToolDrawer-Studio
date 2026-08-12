@@ -42,10 +42,6 @@ class ToolObject:
     base_contour_mm: list[Point2D]
     contour_mm: list[Point2D]
     clearance_mm: float = 0.6
-    # Transitional runtime field retained only until the V2 persistence/UI
-    # migration is complete later in this feature branch. New measurement
-    # logic must use pocket_depth_override_mm instead.
-    depth_mm: float = 5.0
     trace_confidence: float = 0.0
     side_view_capture_id: str | None = None
     automatic_thickness_mm: float | None = None
