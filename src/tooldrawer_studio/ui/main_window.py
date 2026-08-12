@@ -34,6 +34,7 @@ from tooldrawer_studio.domain.models import CalibrationRecord, Point2D, ToolObje
 from tooldrawer_studio.ui.calibration_view import CalibrationImageView
 from tooldrawer_studio.ui.capture_tray import CaptureTrayWidget, qr_image
 from tooldrawer_studio.ui.contour_editor import ContourEditor
+from tooldrawer_studio.ui.measure_panel import MeasurePanel
 from tooldrawer_studio.ui.webcam_panel import WebcamPanel
 from tooldrawer_studio.ui.workflow_controller import (
     MIN_AUTOMATIC_TRACE_CALIBRATION_CONFIDENCE,
@@ -55,16 +56,20 @@ class MainWindow(QMainWindow):
         self.webcam_panel: WebcamPanel | None = None
         self._last_pending_count = 0
         self._phone_ui_active = False
+        self._measure_calibration_tool_id: str | None = None
+        self._measurement_warnings: dict[str, tuple[str, ...]] = {}
 
         self.tabs = QTabWidget(self)
         self.setCentralWidget(self.tabs)
         self.tabs.addTab(self._capture_stage(), "1. Import & Calibrate")
         self.tabs.addTab(self._edit_stage(), "2. Detect & Edit")
-        self.tabs.addTab(self._pocket_stage(), "3. Pocket Settings")
-        self.tabs.addTab(self._export_stage(), "4. Save & Export")
-        self.tabs.setTabEnabled(1, False)
-        self.tabs.setTabEnabled(2, False)
-        self.tabs.setTabEnabled(3, False)
+        self.measure_panel = MeasurePanel()
+        self._connect_measure_panel()
+        self.tabs.addTab(self.measure_panel, "3. Measure")
+        self.tabs.addTab(self._pocket_stage(), "4. Pocket Settings")
+        self.tabs.addTab(self._export_stage(), "5. Save & Export")
+        for index in (1, 2, 3, 4):
+            self.tabs.setTabEnabled(index, False)
 
         self.capture_poll_timer = QTimer(self)
         self.capture_poll_timer.setInterval(250)
@@ -218,10 +223,8 @@ class MainWindow(QMainWindow):
         form = QFormLayout()
         self.tool_name = QLineEdit()
         self.tool_clearance = self._number(0.0, 25.0, 0.6)
-        self.tool_depth = self._number(0.01, 1000.0, 5.0)
         form.addRow("Tool name", self.tool_name)
         form.addRow("Clearance", self.tool_clearance)
-        form.addRow("Tool depth", self.tool_depth)
         left.addLayout(form)
         apply_button = QPushButton("Apply Tool Settings")
         apply_button.clicked.connect(self._apply_tool_settings)
@@ -271,11 +274,11 @@ class MainWindow(QMainWindow):
         self.base_width = self._number(1, 2000, 300)
         self.base_height = self._number(1, 2000, 200)
         self.base_thickness = self._number(0.1, 200, 10)
-        self.pocket_depth = self._number(0.01, 199, 5)
+        self.pocket_depth_label = QLabel("No resolved pocket depth")
         form.addRow("Base width", self.base_width)
         form.addRow("Base height", self.base_height)
         form.addRow("Base thickness", self.base_thickness)
-        form.addRow("Pocket depth", self.pocket_depth)
+        form.addRow("Pocket depth", self.pocket_depth_label)
         layout.addLayout(form)
         button = QPushButton("Apply Pocket Settings")
         button.clicked.connect(self._configure_pocket)
@@ -299,6 +302,31 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.export_status)
         layout.addStretch()
         return page
+
+    def _connect_measure_panel(self) -> None:
+        self.measure_panel.attachRequested.connect(self._measure_attach_side_view)
+        self.measure_panel.calibrateRequested.connect(self._measure_calibrate_side_view)
+        self.measure_panel.measureRequested.connect(self._measure_automatically)
+        self.measure_panel.acceptRequested.connect(self._measure_accept_automatic)
+        self.measure_panel.manualEndpointsRequested.connect(
+            self._measure_enable_manual_points
+        )
+        self.measure_panel.resetAutomaticRequested.connect(
+            self._measure_reset_automatic
+        )
+        self.measure_panel.manualThicknessRequested.connect(
+            self._measure_set_manual_thickness
+        )
+        self.measure_panel.exposedHeightChanged.connect(
+            self._measure_exposed_height_changed
+        )
+        self.measure_panel.bottomClearanceChanged.connect(
+            self._measure_bottom_clearance_changed
+        )
+        self.measure_panel.pocketOverrideChanged.connect(
+            self._measure_pocket_override_changed
+        )
+        self.measure_panel.endpointsChanged.connect(self._measure_endpoints_changed)
 
     def _show_error(self, exc: Exception) -> None:
         QMessageBox.critical(self, "ToolDrawer Studio", str(exc))
@@ -348,6 +376,13 @@ class MainWindow(QMainWindow):
         return CalibrationTargetSpec(paper)
 
     def _update_calibration_status(self, record: CalibrationRecord) -> None:
+        if self._measure_calibration_tool_id is not None:
+            self.calibration_status.setText(
+                f"Side-view calibration: {record.method}, confidence {record.confidence:.0%}"
+            )
+            self.low_confidence_override.setChecked(False)
+            self.low_confidence_override.setVisible(False)
+            return
         self.calibration_status.setText(
             f"Calibration: {record.method}, confidence {record.confidence:.0%}"
         )
@@ -358,12 +393,24 @@ class MainWindow(QMainWindow):
         self.tabs.setTabEnabled(1, True)
 
     def _advance_after_calibration(self, record: CalibrationRecord) -> None:
+        if self._measure_calibration_tool_id is not None:
+            tool_id = self._measure_calibration_tool_id
+            self._measure_calibration_tool_id = None
+            self.controller.select_tool(tool_id)
+            self.controller.activate_capture(
+                self.controller.selected_tool().source_capture_id
+            )
+            self._refresh_measure_state()
+            self.tabs.setTabEnabled(2, True)
+            self.tabs.setCurrentIndex(2)
+            return
         if record.confidence >= MIN_AUTOMATIC_TRACE_CALIBRATION_CONFIDENCE:
             self.tabs.setCurrentIndex(1)
         else:
             self.tabs.setCurrentIndex(0)
 
     def _reset_for_uncalibrated_active_image(self) -> None:
+        self._measure_calibration_tool_id = None
         self.calibration_view.set_image_bytes(
             self.controller.active_image_display_bytes()
         )
@@ -372,7 +419,7 @@ class MainWindow(QMainWindow):
         self.low_confidence_override.setChecked(False)
         self.low_confidence_override.setVisible(False)
         self.tool_list.clear()
-        for index in (1, 2, 3):
+        for index in (1, 2, 3, 4):
             self.tabs.setTabEnabled(index, False)
         self.tabs.setCurrentIndex(0)
 
@@ -388,6 +435,7 @@ class MainWindow(QMainWindow):
         try:
             path = Path(filename)
             self.controller = WorkflowController()
+            self._measurement_warnings.clear()
             self.controller.import_image(path)
             self._reset_for_uncalibrated_active_image()
         except Exception as exc:
@@ -452,12 +500,14 @@ class MainWindow(QMainWindow):
     def _capture_source_changed(self) -> None:
         self.capture_tray.refresh()
         self._last_pending_count = len(self.capture_session.items())
+        self._refresh_measure_sources_if_possible()
 
     def _poll_capture_state(self) -> None:
         count = len(self.capture_session.items())
         if count != self._last_pending_count:
             self.capture_tray.refresh()
             self._last_pending_count = count
+            self._refresh_measure_sources_if_possible()
         if self._phone_ui_active and not self.phone_server.is_running:
             self._set_phone_stopped("Phone capture: stopped or expired")
 
@@ -557,10 +607,11 @@ class MainWindow(QMainWindow):
             tool = self.controller.selected_tool()
             self.tool_name.setText(tool.name)
             self.tool_clearance.setValue(tool.clearance_mm)
-            self.tool_depth.setValue(tool.depth_mm)
             self.segment_index.setMaximum(max(0, len(tool.contour_mm) - 1))
             self.vertex_index.setMaximum(max(0, len(tool.contour_mm) - 1))
             self.contour_editor.set_tool(tool)
+            self.tabs.setTabEnabled(2, True)
+            self._refresh_measure_state()
         except Exception as exc:
             self._show_error(exc)
 
@@ -577,11 +628,11 @@ class MainWindow(QMainWindow):
             self.controller.update_tool_settings(
                 tool.id,
                 clearance_mm=self.tool_clearance.value(),
-                depth_mm=self.tool_depth.value(),
             )
             current = self.tool_list.currentItem()
             if current is not None:
                 current.setText(self.controller.selected_tool().name)
+            self._refresh_measure_state()
         except Exception as exc:
             self._show_error(exc)
 
@@ -612,17 +663,238 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._show_error(exc)
 
+    def _refresh_measure_sources_if_possible(self) -> None:
+        if not self.controller.project.tools:
+            return
+        try:
+            tool = self.controller.selected_tool()
+        except ValueError:
+            return
+        self.measure_panel.set_sources(
+            [
+                (capture.id, capture.filename)
+                for capture in self.controller.project.captures
+                if capture.id != tool.source_capture_id
+            ],
+            [(item.id, item.filename) for item in self.capture_session.items()],
+            selected_capture_id=tool.side_view_capture_id,
+        )
+
+    def _refresh_measure_state(self) -> None:
+        tool = self.controller.selected_tool()
+        self._refresh_measure_sources_if_possible()
+
+        warnings = list(self._measurement_warnings.get(tool.id, ()))
+        try:
+            suggested = self.controller.suggested_pocket_depth(tool.id)
+            final = self.controller.resolved_pocket_depth(tool.id)
+        except ValueError as exc:
+            suggested = None
+            final = tool.pocket_depth_override_mm
+            warnings.append(str(exc))
+
+        calibration = (
+            None
+            if tool.side_view_capture_id is None
+            else self.controller.calibration_for_capture(tool.side_view_capture_id)
+        )
+        calibration_text = (
+            "Side-view calibration: not set"
+            if calibration is None
+            else f"Side-view calibration: {calibration.method}, confidence {calibration.confidence:.0%}"
+        )
+        self.measure_panel.set_tool_state(
+            self.controller.project,
+            tool,
+            suggested_depth=suggested,
+            final_depth=final,
+            calibration_text=calibration_text,
+            warnings=warnings,
+        )
+
+        if final is None:
+            self.pocket_depth_label.setText("No resolved pocket depth")
+        else:
+            self.pocket_depth_label.setText(f"{final:.3f} mm (from Measure)")
+
+        if tool.side_view_capture_id is not None:
+            self.measure_panel.measurement_view.set_image_bytes(
+                self.controller.capture_display_bytes(tool.side_view_capture_id)
+            )
+            endpoint_a = (
+                tool.corrected_thickness_endpoint_a_px
+                or tool.automatic_thickness_endpoint_a_px
+            )
+            endpoint_b = (
+                tool.corrected_thickness_endpoint_b_px
+                or tool.automatic_thickness_endpoint_b_px
+            )
+            if endpoint_a is None or endpoint_b is None:
+                endpoint_a = None
+                endpoint_b = None
+            self.measure_panel.measurement_view.set_overlay(
+                tool.side_view_silhouette_px,
+                endpoint_a,
+                endpoint_b,
+            )
+
+        self.tabs.setTabEnabled(3, final is not None)
+        if final is None:
+            self.tabs.setTabEnabled(4, False)
+
+    def _measure_attach_side_view(self) -> None:
+        try:
+            source = self.measure_panel.selected_source()
+            if source is None:
+                raise ValueError("Select a side-view source")
+            source_kind, source_id = source
+            if source_kind == "project":
+                capture_id = source_id
+            elif source_kind == "pending":
+                payload = self.capture_session.promotion_bytes(source_id)
+                capture_id = self.controller.import_image_bytes(
+                    payload.raw, payload.filename
+                )
+                self.capture_tray.refresh()
+                self._last_pending_count = len(self.capture_session.items())
+            else:
+                raise ValueError("Unknown side-view source")
+
+            tool = self.controller.selected_tool()
+            self.controller.attach_side_view(tool.id, capture_id)
+            self.controller.activate_capture(tool.source_capture_id)
+            self._measurement_warnings.pop(tool.id, None)
+            self._refresh_measure_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _measure_calibrate_side_view(self) -> None:
+        try:
+            tool = self.controller.selected_tool()
+            if tool.side_view_capture_id is None:
+                raise ValueError("Attach a side-view capture before calibrating")
+            self._measure_calibration_tool_id = tool.id
+            self.controller.activate_capture(tool.side_view_capture_id)
+            self.calibration_view.set_image_bytes(
+                self.controller.active_image_display_bytes()
+            )
+            self.calibration_view.clear_points()
+            record = self.controller.active_calibration
+            if record is None:
+                self.calibration_status.setText("Side-view calibration: not set")
+            else:
+                self._set_mode_from_calibration(record)
+                self._update_calibration_status(record)
+            self.low_confidence_override.setVisible(False)
+            self.tabs.setCurrentIndex(0)
+        except Exception as exc:
+            self._measure_calibration_tool_id = None
+            self._show_error(exc)
+
+    def _measure_automatically(self) -> None:
+        try:
+            tool = self.controller.selected_tool()
+            result = self.controller.measure_tool_thickness(tool.id)
+            self._measurement_warnings[tool.id] = result.warnings
+            self._refresh_measure_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _measure_accept_automatic(self) -> None:
+        try:
+            tool = self.controller.selected_tool()
+            self.controller.accept_automatic_thickness(tool.id)
+            self._refresh_measure_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _measure_enable_manual_points(self) -> None:
+        try:
+            tool = self.controller.selected_tool()
+            if tool.side_view_capture_id is None:
+                raise ValueError("Attach a side-view capture before measuring")
+            if self.controller.calibration_for_capture(tool.side_view_capture_id) is None:
+                raise ValueError("Calibrate the side-view capture before measuring")
+            self.measure_panel.measurement_view.set_manual_point_mode(True)
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _measure_reset_automatic(self) -> None:
+        try:
+            tool = self.controller.selected_tool()
+            self.controller.reset_to_automatic_thickness(tool.id)
+            self.measure_panel.measurement_view.set_manual_point_mode(False)
+            self._refresh_measure_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _measure_set_manual_thickness(self, thickness_mm: float) -> None:
+        try:
+            tool = self.controller.selected_tool()
+            self.controller.set_manual_thickness(tool.id, thickness_mm)
+            self._refresh_measure_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _measure_endpoints_changed(self, endpoints: object) -> None:
+        try:
+            if not isinstance(endpoints, tuple) or len(endpoints) != 2:
+                return
+            tool = self.controller.selected_tool()
+            self.controller.set_thickness_endpoints(
+                tool.id, endpoints[0], endpoints[1]
+            )
+            self._refresh_measure_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _measure_exposed_height_changed(self, change: object) -> None:
+        try:
+            scope, value = change  # type: ignore[misc]
+            tool = self.controller.selected_tool()
+            if scope == "project":
+                self.controller.set_project_measure_defaults(exposed_height_mm=value)
+            elif scope == "tool":
+                self.controller.set_exposed_height_override(tool.id, value)
+            else:
+                raise ValueError("Unknown exposed-height setting scope")
+            self._refresh_measure_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _measure_bottom_clearance_changed(self, change: object) -> None:
+        try:
+            scope, value = change  # type: ignore[misc]
+            tool = self.controller.selected_tool()
+            if scope == "project":
+                self.controller.set_project_measure_defaults(bottom_clearance_mm=value)
+            elif scope == "tool":
+                self.controller.set_bottom_clearance_override(tool.id, value)
+            else:
+                raise ValueError("Unknown bottom-clearance setting scope")
+            self._refresh_measure_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _measure_pocket_override_changed(self, value: object) -> None:
+        try:
+            tool = self.controller.selected_tool()
+            self.controller.set_pocket_depth_override(tool.id, value)  # type: ignore[arg-type]
+            self._refresh_measure_state()
+        except Exception as exc:
+            self._show_error(exc)
+
     def _configure_pocket(self) -> None:
         try:
             self.controller.configure_pocket(
                 self.base_width.value(),
                 self.base_height.value(),
                 self.base_thickness.value(),
-                self.pocket_depth.value(),
+                pocket_depth_mm=None,
             )
             self.pocket_status.setText("Pocket settings applied")
-            self.tabs.setTabEnabled(3, True)
-            self.tabs.setCurrentIndex(3)
+            self.tabs.setTabEnabled(4, True)
+            self.tabs.setCurrentIndex(4)
         except Exception as exc:
             self._show_error(exc)
 
@@ -672,6 +944,11 @@ class MainWindow(QMainWindow):
             return
         try:
             self.controller = WorkflowController.open(Path(filename))
+            self._measurement_warnings.clear()
+            if self.controller.project.tools:
+                self.controller.activate_capture(
+                    self.controller.project.tools[0].source_capture_id
+                )
             if self.controller.project.captures:
                 self.calibration_view.set_image_bytes(
                     self.controller.active_image_display_bytes()
@@ -684,10 +961,14 @@ class MainWindow(QMainWindow):
                 self.calibration_status.setText("Calibration: not set")
                 self.low_confidence_override.setChecked(False)
                 self.low_confidence_override.setVisible(False)
-                self.tabs.setTabEnabled(1, False)
+                self.tabs.setTabEnabled(1, bool(self.controller.project.tools))
             self._populate_tools()
-            self.tabs.setTabEnabled(2, bool(self.controller.project.tools))
+            has_tools = bool(self.controller.project.tools)
+            self.tabs.setTabEnabled(2, has_tools)
             self.tabs.setTabEnabled(3, False)
+            self.tabs.setTabEnabled(4, False)
+            if has_tools:
+                self._refresh_measure_state()
         except Exception as exc:
             self._show_error(exc)
 
@@ -702,7 +983,7 @@ class MainWindow(QMainWindow):
                 self.base_width.value(),
                 self.base_height.value(),
                 self.base_thickness.value(),
-                self.pocket_depth.value(),
+                pocket_depth_mm=None,
             )
             paths = self.controller.export_selected_tool(Path(directory))
             self.export_status.setText(

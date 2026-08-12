@@ -1,8 +1,7 @@
 name: Windows Tests
 
 on:
-  pull_request:
-    branches: [main]
+  pull_request: {}
 
 concurrency:
   group: windows-tests-pr-${{ github.event.pull_request.number }}
@@ -22,5 +21,9 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Install package and test dependencies
         run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Import and bytecode sanity
+        run: |
+          python -m compileall -q src tests
+          python -c "from tooldrawer_studio.ui.main_window import MainWindow; from tooldrawer_studio.measurement.service import ThicknessMeasurementService; print('imports-ok')"
       - name: Run tests
         run: python -m pytest -q

@@ -39,3 +39,34 @@ def test_vertical_slice_from_photo_to_exports(
 
     retraced = reopened.trace_tools(allow_low_confidence=True)
     assert len(retraced) == 2
+
+
+def test_vertical_slice_uses_measure_resolved_depth_for_exports(
+    tmp_path: Path, simple_tools_image_path: Path
+):
+    controller = WorkflowController()
+    controller.import_image(simple_tools_image_path)
+    controller.calibrate_known_distance(
+        PixelPoint(0, 0), PixelPoint(100, 0), known_distance_mm=100.0
+    )
+    tools = controller.trace_tools(allow_low_confidence=True)
+    tool = tools[0]
+    controller.select_tool(tool.id)
+    controller.set_manual_thickness(tool.id, 6.0)
+
+    assert controller.resolved_pocket_depth(tool.id) == 2.8
+
+    controller.configure_pocket(
+        base_width_mm=300,
+        base_height_mm=200,
+        base_thickness_mm=10,
+        pocket_depth_mm=None,
+    )
+    outputs = controller.export_selected_tool(tmp_path / "measured-exports")
+
+    assert outputs.step.exists()
+    assert outputs.stl.exists()
+    assert outputs.dxf.exists()
+    assert outputs.step.stat().st_size > 100
+    assert outputs.stl.stat().st_size > 100
+    assert outputs.dxf.stat().st_size > 100
