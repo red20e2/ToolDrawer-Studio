@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import http.client
 import importlib
-import socket
-from contextlib import closing
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -222,3 +220,17 @@ def test_production_start_rejects_explicit_loopback():
 
     with pytest.raises(RuntimeError, match="private/local IPv4"):
         server.start("127.0.0.1")
+
+
+def test_unsupported_http_methods_return_405(running_server):
+    server, session, captures, endpoint = running_server
+
+    for method in ("HEAD", "OPTIONS"):
+        connection = http.client.HTTPConnection(endpoint.host, endpoint.port, timeout=3)
+        connection.request(method, "/upload?token=test-token")
+        response = connection.getresponse()
+        try:
+            assert response.status == 405
+        finally:
+            response.read()
+            connection.close()
