@@ -82,7 +82,12 @@ class _UploadHandler(BaseHTTPRequestHandler):
         token = parse_qs(parsed.query, keep_blank_values=True).get("token", [None])[0]
         return parsed.path, token
 
-    def _send(self, status: int, body: bytes = b"", content_type: str = "text/plain; charset=utf-8") -> None:
+    def _send(
+        self,
+        status: int,
+        body: bytes = b"",
+        content_type: str = "text/plain; charset=utf-8",
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
@@ -90,6 +95,12 @@ class _UploadHandler(BaseHTTPRequestHandler):
         self.end_headers()
         if body:
             self.wfile.write(body)
+
+    def _method_not_allowed(self) -> None:
+        self.send_response(405)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
 
     def do_GET(self) -> None:
         path, token = self._request_parts()
@@ -110,7 +121,9 @@ class _UploadHandler(BaseHTTPRequestHandler):
             self._send(403, b"Invalid or expired phone session")
             return
 
-        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        content_type = (
+            self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
+        )
         if not content_type.startswith("image/"):
             self._send(415, b"Only image uploads are accepted")
             return
@@ -162,14 +175,20 @@ class _UploadHandler(BaseHTTPRequestHandler):
             return
         self._send(201, b"Uploaded")
 
+    def do_HEAD(self) -> None:
+        self._method_not_allowed()
+
+    def do_OPTIONS(self) -> None:
+        self._method_not_allowed()
+
     def do_PUT(self) -> None:
-        self._send(405, b"Method not allowed")
+        self._method_not_allowed()
 
     def do_DELETE(self) -> None:
-        self._send(405, b"Method not allowed")
+        self._method_not_allowed()
 
     def do_PATCH(self) -> None:
-        self._send(405, b"Method not allowed")
+        self._method_not_allowed()
 
 
 class PhoneUploadServer:
@@ -210,7 +229,9 @@ class PhoneUploadServer:
         if self._allow_test_loopback and host == "127.0.0.1":
             return host
         if not is_private_lan_ipv4(host):
-            raise RuntimeError("No private/local IPv4 address is available for phone capture")
+            raise RuntimeError(
+                "No private/local IPv4 address is available for phone capture"
+            )
         return host
 
     def start(self, host: str | None = None) -> ServerEndpoint:
