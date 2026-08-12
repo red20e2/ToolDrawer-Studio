@@ -85,15 +85,30 @@ def tool_cavity_polygon(tool: ToolObject) -> Polygon:
     return _largest_valid_polygon(buffered)
 
 
+def _local_cavity_polygon(tool: ToolObject) -> Polygon:
+    cavity = tool_cavity_polygon(tool)
+    anchor = cavity.centroid
+    return _largest_valid_polygon(
+        translate(cavity, xoff=-anchor.x, yoff=-anchor.y)
+    )
+
+
+def _place_local_geometry(geometry: BaseGeometry, placement: ToolPlacement) -> BaseGeometry:
+    rotated = rotate(
+        geometry,
+        placement.rotation_deg,
+        origin=(0.0, 0.0),
+        use_radians=False,
+    )
+    return translate(rotated, xoff=placement.x_mm, yoff=placement.y_mm)
+
+
 def oriented_cavity_polygon(tool: ToolObject, placement: ToolPlacement) -> Polygon:
     """Rotate a cavity about its stable centroid, then move it to placement X/Y."""
 
-    cavity = tool_cavity_polygon(tool)
-    anchor = cavity.centroid
-    local = translate(cavity, xoff=-anchor.x, yoff=-anchor.y)
-    rotated = rotate(local, placement.rotation_deg, origin=(0.0, 0.0), use_radians=False)
-    moved = translate(rotated, xoff=placement.x_mm, yoff=placement.y_mm)
-    return _largest_valid_polygon(moved)
+    return _largest_valid_polygon(
+        _place_local_geometry(_local_cavity_polygon(tool), placement)
+    )
 
 
 def spacing_exclusion_polygon(
@@ -108,10 +123,10 @@ def spacing_exclusion_polygon(
     """
 
     spacing = _finite_nonnegative(spacing_mm, "spacing_mm")
-    cavity = oriented_cavity_polygon(tool, placement)
-    if spacing <= 0.0:
-        return cavity
-    return _largest_valid_polygon(cavity.buffer(spacing / 2.0))
+    local = _local_cavity_polygon(tool)
+    if spacing > 0.0:
+        local = _largest_valid_polygon(local.buffer(spacing / 2.0))
+    return _largest_valid_polygon(_place_local_geometry(local, placement))
 
 
 def grab_exclusion_polygon(
@@ -120,9 +135,13 @@ def grab_exclusion_polygon(
     spacing_mm: float,
     default_grab_clearance_mm: float,
 ) -> BaseGeometry:
-    normal = spacing_exclusion_polygon(tool, placement, spacing_mm)
+    spacing = _finite_nonnegative(spacing_mm, "spacing_mm")
+    local_normal: BaseGeometry = _local_cavity_polygon(tool)
+    if spacing > 0.0:
+        local_normal = _largest_valid_polygon(local_normal.buffer(spacing / 2.0))
+
     if placement.grab_side == "none":
-        return normal
+        return _place_local_geometry(local_normal, placement)
 
     requested = (
         placement.grab_clearance_override_mm
@@ -131,9 +150,9 @@ def grab_exclusion_polygon(
     )
     clearance = _finite_nonnegative(requested, "grab_clearance_mm")
     if clearance <= 0.0:
-        return normal
+        return _place_local_geometry(local_normal, placement)
 
-    minx, miny, maxx, maxy = normal.bounds
+    minx, miny, maxx, maxy = local_normal.bounds
     if placement.grab_side == "right":
         extra = box(maxx, miny, maxx + clearance, maxy)
     elif placement.grab_side == "left":
@@ -142,7 +161,9 @@ def grab_exclusion_polygon(
         extra = box(minx, maxy, maxx, maxy + clearance)
     else:  # bottom
         extra = box(minx, miny - clearance, maxx, miny)
-    return unary_union((normal, extra))
+
+    local_with_grab = unary_union((local_normal, extra))
+    return _place_local_geometry(local_with_grab, placement)
 
 
 def candidate_exclusion_geometry(
