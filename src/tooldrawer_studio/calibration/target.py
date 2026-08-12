@@ -60,12 +60,17 @@ def target_svg(spec: CalibrationTargetSpec) -> str:
 
     crosshair_lines: list[str] = []
     arm = spec.fiducial_size_mm * 0.9
+    gap = half + max(1.5, spec.fiducial_size_mm * 0.15)
     for x, y in centers:
         crosshair_lines.extend(
             (
                 f'  <line x1="{_number(x - arm)}" y1="{_number(y)}" '
+                f'x2="{_number(x - gap)}" y2="{_number(y)}" stroke="black" stroke-width="0.25" />',
+                f'  <line x1="{_number(x + gap)}" y1="{_number(y)}" '
                 f'x2="{_number(x + arm)}" y2="{_number(y)}" stroke="black" stroke-width="0.25" />',
                 f'  <line x1="{_number(x)}" y1="{_number(y - arm)}" '
+                f'x2="{_number(x)}" y2="{_number(y - gap)}" stroke="black" stroke-width="0.25" />',
+                f'  <line x1="{_number(x)}" y1="{_number(y + gap)}" '
                 f'x2="{_number(x)}" y2="{_number(y + arm)}" stroke="black" stroke-width="0.25" />',
             )
         )
