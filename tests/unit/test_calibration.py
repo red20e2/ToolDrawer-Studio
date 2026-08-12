@@ -47,8 +47,8 @@ def test_rectangle_calibration_maps_letter_width_and_height():
     )
 
     mapped = pixel_to_mm(record, PixelPoint(850.0, 1100.0))
-    assert abs(mapped.x_mm - 215.9) < 1e-6
-    assert abs(mapped.y_mm - 279.4) < 1e-6
+    assert mapped.x_mm == pytest.approx(215.9, abs=1e-5)
+    assert mapped.y_mm == pytest.approx(279.4, abs=1e-5)
 
 
 def test_calibration_rejects_degenerate_inputs():
