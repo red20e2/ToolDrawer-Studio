@@ -36,3 +36,6 @@ def test_vertical_slice_from_photo_to_exports(
     assert outputs.step.stat().st_size > 100
     assert outputs.stl.stat().st_size > 100
     assert outputs.dxf.stat().st_size > 100
+
+    retraced = reopened.trace_tools()
+    assert len(retraced) == 2
