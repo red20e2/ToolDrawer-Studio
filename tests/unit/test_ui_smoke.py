@@ -178,8 +178,11 @@ def test_pending_side_view_promotion_restores_top_capture_as_active_context():
     tool = _add_window_tool(window, top_capture)
     pending = window.capture_session.add_bytes("phone", _png_bytes(), "side.png")
     window._refresh_measure_sources_if_possible()
-    index = window.measure_panel.source_combo.findData(("pending", pending.id))
-    assert index >= 0
+    index = next(
+        index
+        for index in range(window.measure_panel.source_combo.count())
+        if window.measure_panel.source_combo.itemData(index) == ("pending", pending.id)
+    )
     window.measure_panel.source_combo.setCurrentIndex(index)
 
     window._measure_attach_side_view()
