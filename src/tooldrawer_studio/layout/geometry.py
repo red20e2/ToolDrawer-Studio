@@ -119,7 +119,8 @@ def spacing_exclusion_polygon(
     """Return half-spacing expansion around a cavity.
 
     Pairwise half-spacing buffers make two just-touching exclusion polygons equal
-    to the requested cavity-to-cavity structural gap.
+    to the requested cavity-to-cavity structural gap. This geometry is only for
+    tool-to-tool spacing checks; it must not inflate the outer border margin.
     """
 
     spacing = _finite_nonnegative(spacing_mm, "spacing_mm")
@@ -129,19 +130,19 @@ def spacing_exclusion_polygon(
     return _largest_valid_polygon(_place_local_geometry(local, placement))
 
 
-def grab_exclusion_polygon(
+def grab_access_polygon(
     tool: ToolObject,
     placement: ToolPlacement,
-    spacing_mm: float,
     default_grab_clearance_mm: float,
 ) -> BaseGeometry:
-    spacing = _finite_nonnegative(spacing_mm, "spacing_mm")
-    local_normal: BaseGeometry = _local_cavity_polygon(tool)
-    if spacing > 0.0:
-        local_normal = _largest_valid_polygon(local_normal.buffer(spacing / 2.0))
+    """Return only the required grab-access strip for a placed cavity.
+
+    Grab side is defined in the tool's local orientation, so the strip is created
+    against local cleared-cavity bounds and then rotated with the tool.
+    """
 
     if placement.grab_side == "none":
-        return _place_local_geometry(local_normal, placement)
+        return GeometryCollection()
 
     requested = (
         placement.grab_clearance_override_mm
@@ -150,9 +151,10 @@ def grab_exclusion_polygon(
     )
     clearance = _finite_nonnegative(requested, "grab_clearance_mm")
     if clearance <= 0.0:
-        return _place_local_geometry(local_normal, placement)
+        return GeometryCollection()
 
-    minx, miny, maxx, maxy = local_normal.bounds
+    local_cavity = _local_cavity_polygon(tool)
+    minx, miny, maxx, maxy = local_cavity.bounds
     if placement.grab_side == "right":
         extra = box(maxx, miny, maxx + clearance, maxy)
     elif placement.grab_side == "left":
@@ -161,9 +163,39 @@ def grab_exclusion_polygon(
         extra = box(minx, maxy, maxx, maxy + clearance)
     else:  # bottom
         extra = box(minx, miny - clearance, maxx, miny)
+    return _place_local_geometry(extra, placement)
 
-    local_with_grab = unary_union((local_normal, extra))
-    return _place_local_geometry(local_with_grab, placement)
+
+def boundary_exclusion_geometry(
+    tool: ToolObject,
+    placement: ToolPlacement,
+    default_grab_clearance_mm: float,
+) -> BaseGeometry:
+    """Return geometry that must remain inside the organizer border."""
+
+    cavity = oriented_cavity_polygon(tool, placement)
+    grab = grab_access_polygon(tool, placement, default_grab_clearance_mm)
+    if grab.is_empty:
+        return cavity
+    return unary_union((cavity, grab))
+
+
+def grab_exclusion_polygon(
+    tool: ToolObject,
+    placement: ToolPlacement,
+    spacing_mm: float,
+    default_grab_clearance_mm: float,
+) -> BaseGeometry:
+    """Return the legacy combined search envelope used by packing previews.
+
+    Exact validity is evaluated from cavity spacing and grab access separately.
+    """
+
+    normal = spacing_exclusion_polygon(tool, placement, spacing_mm)
+    grab = grab_access_polygon(tool, placement, default_grab_clearance_mm)
+    if grab.is_empty:
+        return normal
+    return unary_union((normal, grab))
 
 
 def candidate_exclusion_geometry(
