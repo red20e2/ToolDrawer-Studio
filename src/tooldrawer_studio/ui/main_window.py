@@ -1,0 +1,347 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import (
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QSpinBox,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from tooldrawer_studio.calibration.service import PixelPoint
+from tooldrawer_studio.domain.models import Point2D, ToolObject
+from tooldrawer_studio.ui.contour_editor import ContourEditor
+from tooldrawer_studio.ui.workflow_controller import WorkflowController
+
+
+class MainWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("ToolDrawer Studio")
+        self.resize(1100, 760)
+        self.controller = WorkflowController()
+        self.tabs = QTabWidget(self)
+        self.setCentralWidget(self.tabs)
+        self.tabs.addTab(self._capture_stage(), "1. Import & Calibrate")
+        self.tabs.addTab(self._edit_stage(), "2. Detect & Edit")
+        self.tabs.addTab(self._pocket_stage(), "3. Pocket Settings")
+        self.tabs.addTab(self._export_stage(), "4. Save & Export")
+        self.tabs.setTabEnabled(1, False)
+        self.tabs.setTabEnabled(2, False)
+        self.tabs.setTabEnabled(3, False)
+
+    @staticmethod
+    def _number(minimum: float, maximum: float, value: float, decimals: int = 3) -> QDoubleSpinBox:
+        widget = QDoubleSpinBox()
+        widget.setRange(minimum, maximum)
+        widget.setDecimals(decimals)
+        widget.setValue(value)
+        widget.setSuffix(" mm")
+        return widget
+
+    def _capture_stage(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        controls = QHBoxLayout()
+        import_button = QPushButton("Import Photo")
+        open_button = QPushButton("Open .tds Project")
+        import_button.clicked.connect(self._import_photo)
+        open_button.clicked.connect(self._open_project)
+        controls.addWidget(import_button)
+        controls.addWidget(open_button)
+        controls.addStretch()
+        layout.addLayout(controls)
+        self.photo_label = QLabel("Import a tool photo to begin")
+        self.photo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.photo_label.setMinimumHeight(280)
+        layout.addWidget(self.photo_label)
+        form = QFormLayout()
+        self.ax = self._number(-100000, 100000, 0)
+        self.ay = self._number(-100000, 100000, 0)
+        self.bx = self._number(-100000, 100000, 100)
+        self.by = self._number(-100000, 100000, 0)
+        for widget in (self.ax, self.ay, self.bx, self.by):
+            widget.setSuffix(" px")
+        self.known_distance = self._number(0.001, 100000, 100)
+        form.addRow("Point A X", self.ax)
+        form.addRow("Point A Y", self.ay)
+        form.addRow("Point B X", self.bx)
+        form.addRow("Point B Y", self.by)
+        form.addRow("Known distance", self.known_distance)
+        layout.addLayout(form)
+        calibrate_button = QPushButton("Calibrate")
+        calibrate_button.clicked.connect(self._calibrate)
+        layout.addWidget(calibrate_button)
+        self.calibration_status = QLabel("Calibration: not set")
+        layout.addWidget(self.calibration_status)
+        disclaimer = QLabel("Photo-derived dimensions are manufacturing aids, not metrology-grade measurements.")
+        disclaimer.setWordWrap(True)
+        layout.addWidget(disclaimer)
+        return page
+
+    def _edit_stage(self) -> QWidget:
+        page = QWidget()
+        layout = QHBoxLayout(page)
+        left = QVBoxLayout()
+        detect_button = QPushButton("Detect Tools")
+        detect_button.clicked.connect(self._detect_tools)
+        left.addWidget(detect_button)
+        self.tool_list = QListWidget()
+        self.tool_list.currentItemChanged.connect(self._tool_selected)
+        left.addWidget(self.tool_list)
+        form = QFormLayout()
+        self.tool_name = QLineEdit()
+        self.tool_clearance = self._number(0.0, 25.0, 0.6)
+        self.tool_depth = self._number(0.01, 1000.0, 5.0)
+        form.addRow("Tool name", self.tool_name)
+        form.addRow("Clearance", self.tool_clearance)
+        form.addRow("Tool depth", self.tool_depth)
+        left.addLayout(form)
+        apply_button = QPushButton("Apply Tool Settings")
+        apply_button.clicked.connect(self._apply_tool_settings)
+        left.addWidget(apply_button)
+        self.segment_index = QSpinBox()
+        self.vertex_index = QSpinBox()
+        left.addWidget(QLabel("Segment index for midpoint insert"))
+        left.addWidget(self.segment_index)
+        insert_button = QPushButton("Insert Midpoint")
+        insert_button.clicked.connect(self._insert_midpoint)
+        left.addWidget(insert_button)
+        left.addWidget(QLabel("Vertex index to delete"))
+        left.addWidget(self.vertex_index)
+        delete_button = QPushButton("Delete Vertex")
+        delete_button.clicked.connect(self._delete_vertex)
+        left.addWidget(delete_button)
+        actions = QHBoxLayout()
+        undo_button = QPushButton("Undo")
+        redo_button = QPushButton("Redo")
+        reset_button = QPushButton("Reset Trace")
+        actions.addWidget(undo_button)
+        actions.addWidget(redo_button)
+        actions.addWidget(reset_button)
+        left.addLayout(actions)
+        layout.addLayout(left, 1)
+        right = QVBoxLayout()
+        self.contour_editor = ContourEditor()
+        self.contour_editor.contourChanged.connect(self._contour_changed)
+        undo_button.clicked.connect(self.contour_editor.undo_stack.undo)
+        redo_button.clicked.connect(self.contour_editor.undo_stack.redo)
+        reset_button.clicked.connect(self._reset_trace)
+        right.addWidget(self.contour_editor)
+        self.coordinate_label = QLabel("Vertex: --")
+        self.contour_editor.coordinateChanged.connect(lambda x, y: self.coordinate_label.setText(f"Vertex: {x:.3f}, {y:.3f} mm"))
+        right.addWidget(self.coordinate_label)
+        layout.addLayout(right, 3)
+        return page
+
+    def _pocket_stage(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        form = QFormLayout()
+        self.base_width = self._number(1, 2000, 300)
+        self.base_height = self._number(1, 2000, 200)
+        self.base_thickness = self._number(0.1, 200, 10)
+        self.pocket_depth = self._number(0.01, 199, 5)
+        form.addRow("Base width", self.base_width)
+        form.addRow("Base height", self.base_height)
+        form.addRow("Base thickness", self.base_thickness)
+        form.addRow("Pocket depth", self.pocket_depth)
+        layout.addLayout(form)
+        button = QPushButton("Apply Pocket Settings")
+        button.clicked.connect(self._configure_pocket)
+        layout.addWidget(button)
+        self.pocket_status = QLabel("Pocket settings not applied")
+        layout.addWidget(self.pocket_status)
+        layout.addStretch()
+        return page
+
+    def _export_stage(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        save_button = QPushButton("Save Editable .tds Project")
+        export_button = QPushButton("Export STEP + STL + DXF")
+        save_button.clicked.connect(self._save_project)
+        export_button.clicked.connect(self._export_files)
+        layout.addWidget(save_button)
+        layout.addWidget(export_button)
+        self.export_status = QLabel("No export yet")
+        self.export_status.setWordWrap(True)
+        layout.addWidget(self.export_status)
+        layout.addStretch()
+        return page
+
+    def _show_error(self, exc: Exception) -> None:
+        QMessageBox.critical(self, "ToolDrawer Studio", str(exc))
+
+    def _set_photo_pixmap(self, pixmap: QPixmap) -> None:
+        if pixmap.isNull():
+            self.photo_label.setText("Image could not be displayed")
+            return
+        self.photo_label.setPixmap(pixmap.scaled(self.photo_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+
+    def _import_photo(self) -> None:
+        filename, _ = QFileDialog.getOpenFileName(self, "Import Tool Photo", "", "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)")
+        if not filename:
+            return
+        try:
+            path = Path(filename)
+            self.controller = WorkflowController()
+            self.controller.import_image(path)
+            self._set_photo_pixmap(QPixmap(str(path)))
+            self.calibration_status.setText("Calibration: not set")
+            self.tool_list.clear()
+            for index in (1, 2, 3):
+                self.tabs.setTabEnabled(index, False)
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _calibrate(self) -> None:
+        try:
+            record = self.controller.calibrate_known_distance(PixelPoint(self.ax.value(), self.ay.value()), PixelPoint(self.bx.value(), self.by.value()), self.known_distance.value())
+            self.calibration_status.setText(f"Calibration: {record.method}, confidence {record.confidence:.0%}")
+            self.tabs.setTabEnabled(1, True)
+            self.tabs.setCurrentIndex(1)
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _detect_tools(self) -> None:
+        try:
+            tools = self.controller.trace_tools()
+            self._populate_tools(tools)
+            if tools:
+                self.tabs.setTabEnabled(2, True)
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _populate_tools(self, tools: list[ToolObject] | None = None) -> None:
+        self.tool_list.clear()
+        for tool in tools if tools is not None else self.controller.project.tools:
+            item = QListWidgetItem(tool.name)
+            item.setData(Qt.ItemDataRole.UserRole, tool.id)
+            self.tool_list.addItem(item)
+        if self.tool_list.count():
+            self.tool_list.setCurrentRow(0)
+
+    def _tool_selected(self, current: QListWidgetItem | None, _previous: QListWidgetItem | None) -> None:
+        if current is None:
+            return
+        try:
+            self.controller.select_tool(str(current.data(Qt.ItemDataRole.UserRole)))
+            tool = self.controller.selected_tool()
+            self.tool_name.setText(tool.name)
+            self.tool_clearance.setValue(tool.clearance_mm)
+            self.tool_depth.setValue(tool.depth_mm)
+            self.segment_index.setMaximum(max(0, len(tool.contour_mm) - 1))
+            self.vertex_index.setMaximum(max(0, len(tool.contour_mm) - 1))
+            self.contour_editor.set_tool(tool)
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _contour_changed(self, points: list[Point2D]) -> None:
+        try:
+            self.controller.replace_contour(self.controller.selected_tool().id, points)
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _apply_tool_settings(self) -> None:
+        try:
+            tool = self.controller.selected_tool()
+            self.controller.rename_tool(tool.id, self.tool_name.text())
+            self.controller.update_tool_settings(tool.id, clearance_mm=self.tool_clearance.value(), depth_mm=self.tool_depth.value())
+            current = self.tool_list.currentItem()
+            if current is not None:
+                current.setText(self.controller.selected_tool().name)
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _insert_midpoint(self) -> None:
+        try:
+            points = self.contour_editor.contour()
+            if not points:
+                return
+            index = self.segment_index.value()
+            following = (index + 1) % len(points)
+            midpoint = Point2D((points[index].x_mm + points[following].x_mm) / 2.0, (points[index].y_mm + points[following].y_mm) / 2.0)
+            self.contour_editor.insert_vertex(index, midpoint)
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _delete_vertex(self) -> None:
+        try:
+            self.contour_editor.delete_vertex(self.vertex_index.value())
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _reset_trace(self) -> None:
+        try:
+            self.contour_editor.reset_to_base()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _configure_pocket(self) -> None:
+        try:
+            self.controller.configure_pocket(self.base_width.value(), self.base_height.value(), self.base_thickness.value(), self.pocket_depth.value())
+            self.pocket_status.setText("Pocket settings applied")
+            self.tabs.setTabEnabled(3, True)
+            self.tabs.setCurrentIndex(3)
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _save_project(self) -> None:
+        filename, _ = QFileDialog.getSaveFileName(self, "Save ToolDrawer Project", "", "ToolDrawer Studio (*.tds)")
+        if not filename:
+            return
+        try:
+            path = Path(filename)
+            if path.suffix.lower() != ".tds":
+                path = path.with_suffix(".tds")
+            self.controller.save(path)
+            self.export_status.setText(f"Saved {path}")
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _open_project(self) -> None:
+        filename, _ = QFileDialog.getOpenFileName(self, "Open ToolDrawer Project", "", "ToolDrawer Studio (*.tds)")
+        if not filename:
+            return
+        try:
+            self.controller = WorkflowController.open(Path(filename))
+            if self.controller.project.captures:
+                capture = self.controller.project.captures[-1]
+                pixmap = QPixmap()
+                pixmap.loadFromData(self.controller.bundle.image_bytes.get(capture.id, b""))
+                self._set_photo_pixmap(pixmap)
+            calibration = self.controller.active_calibration
+            if calibration is not None:
+                self.calibration_status.setText(f"Calibration: {calibration.method}, confidence {calibration.confidence:.0%}")
+                self.tabs.setTabEnabled(1, True)
+            self._populate_tools()
+            self.tabs.setTabEnabled(2, bool(self.controller.project.tools))
+            self.tabs.setTabEnabled(3, False)
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _export_files(self) -> None:
+        directory = QFileDialog.getExistingDirectory(self, "Export Manufacturing Files")
+        if not directory:
+            return
+        try:
+            self.controller.configure_pocket(self.base_width.value(), self.base_height.value(), self.base_thickness.value(), self.pocket_depth.value())
+            paths = self.controller.export_selected_tool(Path(directory))
+            self.export_status.setText(f"Exported:\n{paths.step}\n{paths.stl}\n{paths.dxf}")
+        except Exception as exc:
+            self._show_error(exc)
