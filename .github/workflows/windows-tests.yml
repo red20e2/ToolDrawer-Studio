@@ -1,8 +1,7 @@
 name: Windows Tests
 
 on:
-  pull_request:
-    branches: [main]
+  pull_request: {}
 
 concurrency:
   group: windows-tests-pr-${{ github.event.pull_request.number }}
