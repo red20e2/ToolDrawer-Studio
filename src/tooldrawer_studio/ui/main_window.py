@@ -427,7 +427,10 @@ class MainWindow(QMainWindow):
             self.stop_phone_button.setEnabled(True)
             self._phone_ui_active = True
         except Exception as exc:
-            self._set_phone_stopped("Phone capture: could not start")
+            try:
+                self.phone_server.stop()
+            finally:
+                self._set_phone_stopped("Phone capture: could not start")
             self._show_error(exc)
 
     def _set_phone_stopped(self, status: str) -> None:
