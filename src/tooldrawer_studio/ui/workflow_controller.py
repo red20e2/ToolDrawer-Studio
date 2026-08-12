@@ -323,16 +323,22 @@ class WorkflowController:
     def measure_tool_thickness(self, tool_id: str) -> ThicknessMeasurementResult:
         tool, image, calibration = self._side_view_context(tool_id)
         result = self._measurement_service.measure(image.pixels_bgr, calibration)
+        preserve_accepted = (
+            tool.thickness_measurement_mode in {"manual", "endpoints"}
+            and tool.thickness_accepted
+            and tool.accepted_thickness_mm is not None
+        )
 
         tool.automatic_thickness_mm = result.automatic_thickness_mm
         tool.automatic_thickness_confidence = result.confidence
         tool.automatic_thickness_endpoint_a_px = result.endpoint_a_px
         tool.automatic_thickness_endpoint_b_px = result.endpoint_b_px
-        tool.corrected_thickness_endpoint_a_px = None
-        tool.corrected_thickness_endpoint_b_px = None
+        if not preserve_accepted:
+            tool.corrected_thickness_endpoint_a_px = None
+            tool.corrected_thickness_endpoint_b_px = None
         tool.side_view_silhouette_px = list(result.silhouette_px)
 
-        if tool.thickness_measurement_mode == "manual" and tool.thickness_accepted:
+        if preserve_accepted:
             tool.thickness_review_required = True
         elif result.confidence >= MIN_AUTOMATIC_THICKNESS_CONFIDENCE:
             tool.accepted_thickness_mm = result.automatic_thickness_mm
