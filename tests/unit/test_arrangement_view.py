@@ -2,7 +2,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QGraphicsView
 
 from tooldrawer_studio.domain.models import Point2D, Project, ToolObject
 from tooldrawer_studio.layout.models import LayoutState, ToolPlacement
@@ -58,6 +58,23 @@ def test_model_scene_coordinate_conversion_keeps_lower_left_model_origin():
     assert model_point == (10.0, 20.0)
     view.close()
     assert app is not None
+
+
+def test_canvas_enables_rubber_band_multi_selection():
+    view = ArrangementView()
+    assert view.view.dragMode() == QGraphicsView.DragMode.RubberBandDrag
+    view.close()
+
+
+def test_grab_side_is_rendered_as_visible_access_overlay():
+    view = ArrangementView()
+    project, layout = _fixture()
+    layout.placement_for("a").grab_side = "right"
+    view.set_project_layout(project, layout, LayoutValidationResult(True, ()))
+
+    tooltips = [item.toolTip() for item in view.scene.items() if item.toolTip()]
+    assert any(text.startswith("Grab access:") and "a" in text for text in tooltips)
+    view.close()
 
 
 def test_gridfinity_lines_are_guides_and_do_not_force_unsnapped_move():
