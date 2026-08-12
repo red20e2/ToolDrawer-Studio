@@ -6,8 +6,8 @@ from tooldrawer_studio.tracing.models import TraceConfig
 from tooldrawer_studio.tracing.opencv_tracer import OpenCVTracer
 
 
-def test_tracer_returns_two_separate_candidates():
-    image = load_image(Path("tests/fixtures/simple_tools.png"), "capture-1")
+def test_tracer_returns_two_separate_candidates(simple_tools_image_path: Path):
+    image = load_image(simple_tools_image_path, "capture-1")
     calibration = calibrate_known_distance(
         "capture-1", PixelPoint(0.0, 0.0), PixelPoint(100.0, 0.0), 100.0
     )
@@ -24,8 +24,8 @@ def test_tracer_returns_two_separate_candidates():
     assert candidates[0].area_mm2 >= candidates[1].area_mm2
 
 
-def test_tracer_rejects_nonpositive_configuration():
-    image = load_image(Path("tests/fixtures/simple_tools.png"), "capture-1")
+def test_tracer_rejects_nonpositive_configuration(simple_tools_image_path: Path):
+    image = load_image(simple_tools_image_path, "capture-1")
     calibration = calibrate_known_distance(
         "capture-1", PixelPoint(0.0, 0.0), PixelPoint(100.0, 0.0), 100.0
     )
