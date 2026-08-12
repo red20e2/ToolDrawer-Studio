@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication, QFileDialog
 from tooldrawer_studio.calibration.service import PixelPoint
 from tooldrawer_studio.ui.calibration_view import CalibrationImageView
 from tooldrawer_studio.ui.main_window import MainWindow
+from tooldrawer_studio.ui.measure_panel import MeasurePanel
 from tooldrawer_studio.ui.workflow_controller import WorkflowController
 
 
@@ -25,16 +26,25 @@ def _png_bytes(width: int = 50, height: int = 20) -> bytes:
     return encoded.tobytes()
 
 
-def test_main_window_constructs_with_four_workflow_stages():
+def test_main_window_constructs_with_five_workflow_stages():
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
     assert window.windowTitle() == "ToolDrawer Studio"
-    assert window.tabs.count() == 4
+    assert window.tabs.count() == 5
+    assert [window.tabs.tabText(index) for index in range(5)] == [
+        "1. Import & Calibrate",
+        "2. Detect & Edit",
+        "3. Measure",
+        "4. Pocket Settings",
+        "5. Save & Export",
+    ]
     assert isinstance(window.calibration_view, CalibrationImageView)
+    assert isinstance(window.measure_panel, MeasurePanel)
     assert window.calibration_mode.count() == 5
     assert window.calibration_mode.itemText(0) == "Known distance"
     assert window.calibration_mode.itemText(4) == "Printable target"
     assert window.low_confidence_override.isHidden()
+    assert not hasattr(window, "tool_depth")
     window.close()
     assert app is not None
 
@@ -83,6 +93,7 @@ def test_opening_uncalibrated_project_disables_detect_stage(
     window._open_project()
 
     assert not window.tabs.isTabEnabled(1)
+    assert not window.tabs.isTabEnabled(2)
     window.close()
     assert app is not None
 
@@ -114,7 +125,7 @@ def test_promote_pending_capture_adds_to_project_without_consuming_tray_item():
     assert window.controller.active_calibration is None
     assert [pending.id for pending in window.capture_session.items()] == [item.id]
     assert window.capture_tray.list_widget.count() == 1
-    assert all(window.tabs.isTabEnabled(index) is False for index in (1, 2, 3))
+    assert all(window.tabs.isTabEnabled(index) is False for index in (1, 2, 3, 4))
     window.close()
     assert app is not None
 
