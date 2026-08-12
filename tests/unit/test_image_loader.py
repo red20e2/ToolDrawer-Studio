@@ -5,8 +5,8 @@ import pytest
 from tooldrawer_studio.capture.image_loader import load_image
 
 
-def test_load_image_preserves_bytes_and_normalizes_bgr():
-    loaded = load_image(Path("tests/fixtures/simple_tools.png"), capture_id="capture-1")
+def test_load_image_preserves_bytes_and_normalizes_bgr(simple_tools_image_path: Path):
+    loaded = load_image(simple_tools_image_path, capture_id="capture-1")
 
     assert loaded.asset.id == "capture-1"
     assert loaded.asset.width_px == 300
