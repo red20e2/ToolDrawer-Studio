@@ -7,6 +7,7 @@ from uuid import uuid4
 import cv2
 import numpy as np
 
+from tooldrawer_studio.calibration.presets import PaperPreset
 from tooldrawer_studio.domain.models import CalibrationRecord, Point2D
 
 
@@ -20,7 +21,42 @@ def _matrix_tuple(matrix: np.ndarray) -> tuple[tuple[float, float, float], ...]:
     return tuple(tuple(float(value) for value in row) for row in matrix)
 
 
-def _record(capture_id: str, method: str, matrix: np.ndarray) -> CalibrationRecord:
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _known_distance_confidence(pixel_span: float) -> float:
+    progress = _clamp01((pixel_span - 20.0) / 480.0)
+    return 0.35 + (0.98 - 0.35) * progress
+
+
+def _rectangle_confidence(source: np.ndarray) -> float:
+    edges = [
+        hypot(
+            float(source[(index + 1) % 4, 0] - source[index, 0]),
+            float(source[(index + 1) % 4, 1] - source[index, 1]),
+        )
+        for index in range(4)
+    ]
+    shortest_edge = min(edges)
+    span_score = _clamp01((shortest_edge - 20.0) / 180.0)
+
+    area = abs(float(cv2.contourArea(source.reshape((-1, 1, 2)))))
+    width = float(np.ptp(source[:, 0]))
+    height = float(np.ptp(source[:, 1]))
+    bounding_area = width * height
+    fill_score = _clamp01(area / bounding_area) if bounding_area > 1e-12 else 0.0
+    return 0.35 + (0.98 - 0.35) * min(span_score, fill_score)
+
+
+def _record(
+    capture_id: str,
+    method: str,
+    matrix: np.ndarray,
+    *,
+    residual_mm: float = 0.0,
+    confidence: float = 1.0,
+) -> CalibrationRecord:
     if matrix.shape != (3, 3) or not np.isfinite(matrix).all():
         raise ValueError("Degenerate calibration transform")
     determinant = float(np.linalg.det(matrix))
@@ -31,8 +67,8 @@ def _record(capture_id: str, method: str, matrix: np.ndarray) -> CalibrationReco
         capture_id=capture_id,
         method=method,
         matrix_3x3=_matrix_tuple(matrix),
-        residual_mm=0.0,
-        confidence=1.0,
+        residual_mm=float(residual_mm),
+        confidence=_clamp01(confidence),
     )
 
 
@@ -73,14 +109,20 @@ def calibrate_known_distance(
         ],
         dtype=np.float64,
     )
-    return _record(capture_id, "known_distance", matrix)
+    return _record(
+        capture_id,
+        "known_distance",
+        matrix,
+        confidence=_known_distance_confidence(pixel_distance),
+    )
 
 
-def calibrate_rectangle(
+def _calibrate_rectangle_method(
     capture_id: str,
     corners_px: tuple[PixelPoint, PixelPoint, PixelPoint, PixelPoint],
     width_mm: float,
     height_mm: float,
+    method: str,
 ) -> CalibrationRecord:
     if width_mm <= 0 or height_mm <= 0:
         raise ValueError("Rectangle dimensions must be positive")
@@ -90,12 +132,60 @@ def calibrate_rectangle(
     source = np.array(
         [[point.x_px, point.y_px] for point in corners_px], dtype=np.float32
     )
+    contour = source.reshape((-1, 1, 2))
+    area = abs(float(cv2.contourArea(contour)))
+    if area <= 1e-6:
+        raise ValueError("Rectangle calibration points have near-zero area")
+    if not cv2.isContourConvex(contour):
+        raise ValueError("Rectangle calibration points must form a convex quadrilateral")
+
     destination = np.array(
         [[0.0, 0.0], [width_mm, 0.0], [width_mm, height_mm], [0.0, height_mm]],
         dtype=np.float32,
     )
     matrix = cv2.getPerspectiveTransform(source, destination).astype(np.float64)
-    return _record(capture_id, "rectangle", matrix)
+    return _record(
+        capture_id,
+        method,
+        matrix,
+        confidence=_rectangle_confidence(source),
+    )
+
+
+def calibrate_rectangle(
+    capture_id: str,
+    corners_px: tuple[PixelPoint, PixelPoint, PixelPoint, PixelPoint],
+    width_mm: float,
+    height_mm: float,
+) -> CalibrationRecord:
+    return _calibrate_rectangle_method(
+        capture_id, corners_px, width_mm, height_mm, "rectangle"
+    )
+
+
+def calibrate_paper(
+    capture_id: str,
+    corners_px: tuple[PixelPoint, PixelPoint, PixelPoint, PixelPoint],
+    preset: PaperPreset,
+) -> CalibrationRecord:
+    return _calibrate_rectangle_method(
+        capture_id,
+        corners_px,
+        preset.width_mm,
+        preset.height_mm,
+        f"paper:{preset.key}",
+    )
+
+
+def calibrate_known_object(
+    capture_id: str,
+    corners_px: tuple[PixelPoint, PixelPoint, PixelPoint, PixelPoint],
+    width_mm: float,
+    height_mm: float,
+) -> CalibrationRecord:
+    return _calibrate_rectangle_method(
+        capture_id, corners_px, width_mm, height_mm, "known_object"
+    )
 
 
 def pixel_to_mm(record: CalibrationRecord, pixel: PixelPoint) -> Point2D:
