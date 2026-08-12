@@ -15,7 +15,10 @@ from PySide6.QtWidgets import (
 )
 
 from tooldrawer_studio.domain.models import Project, ToolObject
-from tooldrawer_studio.layout.geometry import oriented_cavity_polygon
+from tooldrawer_studio.layout.geometry import (
+    candidate_exclusion_geometry,
+    oriented_cavity_polygon,
+)
 from tooldrawer_studio.layout.models import LayoutState, ToolPlacement
 from tooldrawer_studio.layout.validation import LayoutValidationResult
 
@@ -86,6 +89,7 @@ class ArrangementView(QWidget):
         self.scene = QGraphicsScene(self)
         self.view = QGraphicsView(self.scene, self)
         self.view.setRenderHints(self.view.renderHints())
+        self.view.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         self.undo_stack = QUndoStack(self)
         self._project: Project | None = None
         self._layout: LayoutState | None = None
@@ -303,6 +307,15 @@ class ArrangementView(QWidget):
         path.closeSubpath()
         return path
 
+    @classmethod
+    def _geometry_path(cls, owner: "ArrangementView", geometry) -> QPainterPath:
+        if hasattr(geometry, "exterior"):
+            return cls._polygon_path(owner, geometry)
+        path = QPainterPath()
+        for part in getattr(geometry, "geoms", ()):
+            path.addPath(cls._geometry_path(owner, part))
+        return path
+
     def _redraw(self) -> None:
         selected = set(self._selected_ids)
         self.scene.blockSignals(True)
@@ -348,6 +361,23 @@ class ArrangementView(QWidget):
             tool = self._tools.get(tool_id)
             if tool is None:
                 continue
+
+            if placement.grab_side != "none":
+                grab_geometry = candidate_exclusion_geometry(
+                    tool,
+                    placement,
+                    layout.spacing_mm,
+                    layout.grab_clearance_mm,
+                )
+                grab_item = QGraphicsPathItem(
+                    self._geometry_path(self, grab_geometry)
+                )
+                grab_pen = QPen(self.palette().mid().color())
+                grab_pen.setStyle(Qt.PenStyle.DashLine)
+                grab_item.setPen(grab_pen)
+                grab_item.setToolTip(f"Grab access: {tool.name} [{tool_id}]")
+                self.scene.addItem(grab_item)
+
             polygon = oriented_cavity_polygon(tool, placement)
             item = _ToolItem(
                 self,
