@@ -313,9 +313,9 @@ class MainWindow(QMainWindow):
         try:
             path = Path(filename)
             self.controller = WorkflowController()
-            capture_id = self.controller.import_image(path)
+            self.controller.import_image(path)
             self.calibration_view.set_image_bytes(
-                self.controller.bundle.image_bytes[capture_id]
+                self.controller.active_image_display_bytes()
             )
             self.calibration_status.setText("Calibration: not set")
             self.low_confidence_override.setChecked(False)
@@ -528,9 +528,8 @@ class MainWindow(QMainWindow):
         try:
             self.controller = WorkflowController.open(Path(filename))
             if self.controller.project.captures:
-                capture = self.controller.project.captures[-1]
                 self.calibration_view.set_image_bytes(
-                    self.controller.bundle.image_bytes.get(capture.id, b"")
+                    self.controller.active_image_display_bytes()
                 )
             calibration = self.controller.active_calibration
             if calibration is not None:
@@ -538,7 +537,9 @@ class MainWindow(QMainWindow):
                 self._update_calibration_status(calibration)
             else:
                 self.calibration_status.setText("Calibration: not set")
+                self.low_confidence_override.setChecked(False)
                 self.low_confidence_override.setVisible(False)
+                self.tabs.setTabEnabled(1, False)
             self._populate_tools()
             self.tabs.setTabEnabled(2, bool(self.controller.project.tools))
             self.tabs.setTabEnabled(3, False)
