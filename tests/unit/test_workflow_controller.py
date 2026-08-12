@@ -294,3 +294,35 @@ def test_measure_defaults_and_tool_overrides_drive_suggestion_and_resolution():
     assert controller.resolved_pocket_depth(tool.id) == pytest.approx(12.25)
     controller.set_pocket_depth_override(tool.id, None)
     assert controller.resolved_pocket_depth(tool.id) == pytest.approx(16.5)
+
+
+def test_configure_pocket_resolves_measure_depth_when_depth_is_omitted():
+    controller = WorkflowController()
+    capture_id = controller.import_image_bytes(_png_bytes(60, 30), "top.png")
+    tool = _add_tool(controller, capture_id)
+    controller.set_manual_thickness(tool.id, 18.0)
+
+    controller.configure_pocket(100, 80, 20, pocket_depth_mm=None)
+
+    assert controller._pocket_spec is not None
+    assert controller._pocket_spec.pocket_depth_mm == pytest.approx(14.8)
+
+
+def test_configure_pocket_without_resolved_measure_depth_fails():
+    controller = WorkflowController()
+    capture_id = controller.import_image_bytes(_png_bytes(60, 30), "top.png")
+    _add_tool(controller, capture_id)
+
+    with pytest.raises(ValueError, match="Selected tool has no resolved pocket depth"):
+        controller.configure_pocket(100, 80, 20, pocket_depth_mm=None)
+
+
+def test_configure_pocket_keeps_explicit_depth_compatibility():
+    controller = WorkflowController()
+    capture_id = controller.import_image_bytes(_png_bytes(60, 30), "top.png")
+    _add_tool(controller, capture_id)
+
+    controller.configure_pocket(100, 80, 20, pocket_depth_mm=5.0)
+
+    assert controller._pocket_spec is not None
+    assert controller._pocket_spec.pocket_depth_mm == pytest.approx(5.0)
