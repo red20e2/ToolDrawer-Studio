@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -25,9 +26,15 @@ from PySide6.QtWidgets import (
 
 from tooldrawer_studio.calibration.presets import A4, LETTER
 from tooldrawer_studio.calibration.target import CalibrationTargetSpec, write_target_svg
+from tooldrawer_studio.capture.pending import CaptureSessionService
+from tooldrawer_studio.capture.phone_server import PhoneUploadServer
+from tooldrawer_studio.capture.phone_session import PhoneSession
+from tooldrawer_studio.capture.webcam import WebcamCaptureService
 from tooldrawer_studio.domain.models import CalibrationRecord, Point2D, ToolObject
 from tooldrawer_studio.ui.calibration_view import CalibrationImageView
+from tooldrawer_studio.ui.capture_tray import CaptureTrayWidget, qr_image
 from tooldrawer_studio.ui.contour_editor import ContourEditor
+from tooldrawer_studio.ui.webcam_panel import WebcamPanel
 from tooldrawer_studio.ui.workflow_controller import (
     MIN_AUTOMATIC_TRACE_CALIBRATION_CONFIDENCE,
     WorkflowController,
@@ -40,6 +47,15 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("ToolDrawer Studio")
         self.resize(1100, 760)
         self.controller = WorkflowController()
+
+        self.capture_session = CaptureSessionService()
+        self.phone_session = PhoneSession(self.capture_session)
+        self.phone_server = PhoneUploadServer(self.phone_session)
+        self.webcam_service = WebcamCaptureService(self.capture_session)
+        self.webcam_panel: WebcamPanel | None = None
+        self._last_pending_count = 0
+        self._phone_ui_active = False
+
         self.tabs = QTabWidget(self)
         self.setCentralWidget(self.tabs)
         self.tabs.addTab(self._capture_stage(), "1. Import & Calibrate")
@@ -49,6 +65,11 @@ class MainWindow(QMainWindow):
         self.tabs.setTabEnabled(1, False)
         self.tabs.setTabEnabled(2, False)
         self.tabs.setTabEnabled(3, False)
+
+        self.capture_poll_timer = QTimer(self)
+        self.capture_poll_timer.setInterval(250)
+        self.capture_poll_timer.timeout.connect(self._poll_capture_state)
+        self.capture_poll_timer.start()
 
     @staticmethod
     def _number(
@@ -67,16 +88,51 @@ class MainWindow(QMainWindow):
     def _capture_stage(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+        self.capture_layout = layout
 
         controls = QHBoxLayout()
         import_button = QPushButton("Import Photo")
         open_button = QPushButton("Open .tds Project")
+        self.webcam_button = QPushButton("Webcam…")
+        self.start_phone_button = QPushButton("Start Phone Session")
+        self.stop_phone_button = QPushButton("Stop Phone Session")
+        self.stop_phone_button.setEnabled(False)
         import_button.clicked.connect(self._import_photo)
         open_button.clicked.connect(self._open_project)
+        self.webcam_button.clicked.connect(self._toggle_webcam_panel)
+        self.start_phone_button.clicked.connect(self._start_phone_session)
+        self.stop_phone_button.clicked.connect(self._stop_phone_session)
         controls.addWidget(import_button)
         controls.addWidget(open_button)
+        controls.addWidget(self.webcam_button)
+        controls.addWidget(self.start_phone_button)
+        controls.addWidget(self.stop_phone_button)
         controls.addStretch()
         layout.addLayout(controls)
+
+        phone_row = QHBoxLayout()
+        self.phone_qr_label = QLabel()
+        self.phone_qr_label.setMinimumSize(140, 140)
+        self.phone_qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.phone_qr_label.setVisible(False)
+        phone_text = QVBoxLayout()
+        self.phone_status = QLabel("Phone capture: stopped")
+        self.phone_url_label = QLabel()
+        self.phone_url_label.setWordWrap(True)
+        self.phone_url_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.phone_url_label.setVisible(False)
+        phone_text.addWidget(self.phone_status)
+        phone_text.addWidget(self.phone_url_label)
+        phone_text.addStretch()
+        phone_row.addWidget(self.phone_qr_label)
+        phone_row.addLayout(phone_text, 1)
+        layout.addLayout(phone_row)
+
+        self.capture_tray = CaptureTrayWidget(self.capture_session)
+        self.capture_tray.set_promote_callback(self._promote_pending_capture)
+        layout.addWidget(self.capture_tray)
 
         self.calibration_view = CalibrationImageView()
         self.calibration_view.setMinimumHeight(300)
@@ -307,6 +363,19 @@ class MainWindow(QMainWindow):
         else:
             self.tabs.setCurrentIndex(0)
 
+    def _reset_for_uncalibrated_active_image(self) -> None:
+        self.calibration_view.set_image_bytes(
+            self.controller.active_image_display_bytes()
+        )
+        self.calibration_view.clear_points()
+        self.calibration_status.setText("Calibration: not set")
+        self.low_confidence_override.setChecked(False)
+        self.low_confidence_override.setVisible(False)
+        self.tool_list.clear()
+        for index in (1, 2, 3):
+            self.tabs.setTabEnabled(index, False)
+        self.tabs.setCurrentIndex(0)
+
     def _import_photo(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
             self,
@@ -320,15 +389,82 @@ class MainWindow(QMainWindow):
             path = Path(filename)
             self.controller = WorkflowController()
             self.controller.import_image(path)
-            self.calibration_view.set_image_bytes(
-                self.controller.active_image_display_bytes()
-            )
-            self.calibration_status.setText("Calibration: not set")
-            self.low_confidence_override.setChecked(False)
-            self.low_confidence_override.setVisible(False)
-            self.tool_list.clear()
-            for index in (1, 2, 3):
-                self.tabs.setTabEnabled(index, False)
+            self._reset_for_uncalibrated_active_image()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _toggle_webcam_panel(self) -> None:
+        try:
+            if self.webcam_panel is None:
+                self.webcam_panel = WebcamPanel(
+                    self.webcam_service,
+                    on_capture=self._capture_source_changed,
+                    parent=self,
+                )
+                self.capture_layout.insertWidget(2, self.webcam_panel)
+                self.webcam_panel.refresh_cameras()
+                self.webcam_panel.show()
+                return
+            if self.webcam_panel.isHidden():
+                self.webcam_panel.refresh_cameras()
+                self.webcam_panel.show()
+            else:
+                self.webcam_panel.close_camera()
+                self.webcam_panel.hide()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _start_phone_session(self) -> None:
+        try:
+            endpoint = self.phone_server.start()
+            pixmap = QPixmap.fromImage(qr_image(endpoint.upload_url))
+            self.phone_qr_label.setPixmap(pixmap)
+            self.phone_qr_label.setVisible(True)
+            self.phone_url_label.setText(endpoint.upload_url)
+            self.phone_url_label.setVisible(True)
+            self.phone_status.setText("Phone capture: active")
+            self.start_phone_button.setEnabled(False)
+            self.stop_phone_button.setEnabled(True)
+            self._phone_ui_active = True
+        except Exception as exc:
+            self._set_phone_stopped("Phone capture: could not start")
+            self._show_error(exc)
+
+    def _set_phone_stopped(self, status: str) -> None:
+        self._phone_ui_active = False
+        self.phone_status.setText(status)
+        self.phone_qr_label.clear()
+        self.phone_qr_label.setVisible(False)
+        self.phone_url_label.clear()
+        self.phone_url_label.setVisible(False)
+        self.start_phone_button.setEnabled(True)
+        self.stop_phone_button.setEnabled(False)
+
+    def _stop_phone_session(self) -> None:
+        try:
+            self.phone_server.stop()
+        finally:
+            self._set_phone_stopped("Phone capture: stopped")
+
+    def _capture_source_changed(self) -> None:
+        self.capture_tray.refresh()
+        self._last_pending_count = len(self.capture_session.items())
+
+    def _poll_capture_state(self) -> None:
+        count = len(self.capture_session.items())
+        if count != self._last_pending_count:
+            self.capture_tray.refresh()
+            self._last_pending_count = count
+        if self._phone_ui_active and not self.phone_server.is_running:
+            self._set_phone_stopped("Phone capture: stopped or expired")
+
+    def _promote_pending_capture(self, pending_id: str) -> None:
+        try:
+            payload = self.capture_session.promotion_bytes(pending_id)
+            self.controller.import_image_bytes(payload.raw, payload.filename)
+            self._reset_for_uncalibrated_active_image()
+            self.capture_tray.refresh()
+            self._last_pending_count = len(self.capture_session.items())
         except Exception as exc:
             self._show_error(exc)
 
@@ -571,3 +707,14 @@ class MainWindow(QMainWindow):
             )
         except Exception as exc:
             self._show_error(exc)
+
+    def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if hasattr(self, "capture_poll_timer"):
+            self.capture_poll_timer.stop()
+        try:
+            self.phone_server.stop()
+        finally:
+            if self.webcam_panel is not None:
+                self.webcam_panel.close_camera()
+            self.webcam_service.close()
+        super().closeEvent(event)
