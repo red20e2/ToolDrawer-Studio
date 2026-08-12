@@ -35,6 +35,7 @@ class WebcamPanel(QWidget):
         self.camera_combo = QComboBox()
         self.refresh_button = QPushButton("Refresh Cameras")
         self.open_button = QPushButton("Open Camera")
+        self.open_button.setEnabled(False)
         self.capture_button = QPushButton("Capture")
         self.capture_button.setEnabled(False)
         controls.addWidget(self.camera_combo, 1)
@@ -42,6 +43,10 @@ class WebcamPanel(QWidget):
         controls.addWidget(self.open_button)
         controls.addWidget(self.capture_button)
         layout.addLayout(controls)
+
+        self.status_label = QLabel("Select Refresh Cameras to find a device")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
 
         self.preview_label = QLabel("Camera preview")
         self.preview_label.setMinimumSize(320, 220)
@@ -54,12 +59,16 @@ class WebcamPanel(QWidget):
         self.refresh_button.clicked.connect(self.refresh_cameras)
         self.open_button.clicked.connect(self._toggle_camera)
         self.capture_button.clicked.connect(self._capture)
-        self.refresh_cameras()
 
     def refresh_cameras(self) -> None:
         current_index = self.camera_combo.currentData()
         self.camera_combo.clear()
-        cameras = self._service.list_cameras()
+        try:
+            cameras = self._service.list_cameras()
+        except Exception as exc:
+            self.open_button.setEnabled(False)
+            self.status_label.setText(str(exc))
+            return
         selected_row = 0
         for row, camera in enumerate(cameras):
             self.camera_combo.addItem(camera.label, camera.index)
@@ -67,6 +76,9 @@ class WebcamPanel(QWidget):
                 selected_row = row
         if self.camera_combo.count():
             self.camera_combo.setCurrentIndex(selected_row)
+            self.status_label.setText(f"Found {self.camera_combo.count()} camera(s)")
+        else:
+            self.status_label.setText("No cameras found")
         self.open_button.setEnabled(self.camera_combo.count() > 0 or self._camera_open)
 
     def _toggle_camera(self) -> None:
@@ -75,11 +87,21 @@ class WebcamPanel(QWidget):
             return
         camera_index = self.camera_combo.currentData()
         if camera_index is None:
+            self.status_label.setText("Select a camera first")
             return
-        self._service.open(int(camera_index))
+        try:
+            self._service.open(int(camera_index))
+        except Exception as exc:
+            self.preview_timer.stop()
+            self._camera_open = False
+            self.open_button.setText("Open Camera")
+            self.capture_button.setEnabled(False)
+            self.status_label.setText(str(exc))
+            return
         self._camera_open = True
         self.open_button.setText("Close Camera")
         self.capture_button.setEnabled(True)
+        self.status_label.setText("Camera active")
         self.preview_timer.start()
         self._refresh_preview()
 
@@ -88,9 +110,10 @@ class WebcamPanel(QWidget):
             return
         try:
             frame = self._service.preview_frame()
-        except RuntimeError:
+        except RuntimeError as exc:
             self.close_camera()
             self.preview_label.setText("Camera disconnected")
+            self.status_label.setText(f"Camera disconnected: {exc}")
             return
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         height, width = rgb.shape[:2]
@@ -115,7 +138,12 @@ class WebcamPanel(QWidget):
     def _capture(self) -> None:
         if not self._camera_open:
             return
-        self._service.capture()
+        try:
+            self._service.capture()
+        except Exception as exc:
+            self.status_label.setText(str(exc))
+            return
+        self.status_label.setText("Captured to pending tray")
         if self._on_capture is not None:
             self._on_capture()
 
