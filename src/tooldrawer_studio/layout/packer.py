@@ -8,7 +8,11 @@ from shapely.geometry.base import BaseGeometry
 
 from tooldrawer_studio.domain.models import Project, ToolObject
 from tooldrawer_studio.layout.geometry import (
+    boundary_exclusion_geometry,
     candidate_exclusion_geometry,
+    grab_access_polygon,
+    oriented_cavity_polygon,
+    spacing_exclusion_polygon,
     tool_cavity_polygon,
     usable_boundary_polygon,
 )
@@ -24,6 +28,15 @@ class PackingResult:
     placements: tuple[ToolPlacement, ...]
     unplaced_tool_ids: tuple[str, ...]
     validation: LayoutValidationResult
+
+
+@dataclass(frozen=True, slots=True)
+class _PackingGeometry:
+    cavity: BaseGeometry
+    spacing: BaseGeometry
+    grab: BaseGeometry
+    boundary: BaseGeometry
+    search: BaseGeometry
 
 
 def rotation_candidates(placement: ToolPlacement) -> tuple[float, ...]:
@@ -71,19 +84,49 @@ def _copy_layout(layout: LayoutState, placements: Iterable[ToolPlacement]) -> La
     )
 
 
-def _geometry_for(tool: ToolObject, placement: ToolPlacement, layout: LayoutState) -> BaseGeometry:
-    return candidate_exclusion_geometry(
-        tool,
-        placement,
-        spacing_mm=layout.spacing_mm,
-        default_grab_clearance_mm=layout.grab_clearance_mm,
+def _geometry_for(
+    tool: ToolObject,
+    placement: ToolPlacement,
+    layout: LayoutState,
+) -> _PackingGeometry:
+    return _PackingGeometry(
+        cavity=oriented_cavity_polygon(tool, placement),
+        spacing=spacing_exclusion_polygon(tool, placement, layout.spacing_mm),
+        grab=grab_access_polygon(tool, placement, layout.grab_clearance_mm),
+        boundary=boundary_exclusion_geometry(
+            tool,
+            placement,
+            layout.grab_clearance_mm,
+        ),
+        search=candidate_exclusion_geometry(
+            tool,
+            placement,
+            spacing_mm=layout.spacing_mm,
+            default_grab_clearance_mm=layout.grab_clearance_mm,
+        ),
     )
 
 
-def _overlaps_any(candidate: BaseGeometry, existing: Iterable[BaseGeometry]) -> bool:
+def _has_area_intersection(left: BaseGeometry, right: BaseGeometry) -> bool:
+    if left.is_empty or right.is_empty:
+        return False
+    intersection = left.intersection(right)
+    return (
+        not intersection.is_empty
+        and intersection.area > _INTERSECTION_AREA_TOLERANCE
+    )
+
+
+def _conflicts(
+    candidate: _PackingGeometry,
+    existing: Iterable[_PackingGeometry],
+) -> bool:
     for other in existing:
-        intersection = candidate.intersection(other)
-        if not intersection.is_empty and intersection.area > _INTERSECTION_AREA_TOLERANCE:
+        if _has_area_intersection(candidate.spacing, other.spacing):
+            return True
+        if _has_area_intersection(candidate.cavity, other.grab):
+            return True
+        if _has_area_intersection(candidate.grab, other.cavity):
             return True
     return False
 
@@ -97,32 +140,38 @@ def _add_if_in_range(values: set[float], value: float, low: float, high: float) 
 def _axis_candidates(
     low: float,
     high: float,
-    local_low: float,
-    local_high: float,
+    boundary_local_low: float,
+    boundary_local_high: float,
+    anchor_local_low: float,
+    anchor_local_high: float,
     existing_bounds: list[tuple[float, float, float, float]],
     *,
     x_axis: bool,
 ) -> list[float]:
-    minimum_center = low - local_low
-    maximum_center = high - local_high
+    minimum_center = low - boundary_local_low
+    maximum_center = high - boundary_local_high
     if minimum_center > maximum_center + 1e-9:
         return []
 
     values: set[float] = set()
-    for value in (minimum_center, maximum_center, (minimum_center + maximum_center) / 2.0):
+    for value in (
+        minimum_center,
+        maximum_center,
+        (minimum_center + maximum_center) / 2.0,
+    ):
         _add_if_in_range(values, value, minimum_center, maximum_center)
 
-    local_center = (local_low + local_high) / 2.0
+    anchor_center = (anchor_local_low + anchor_local_high) / 2.0
     for bounds in existing_bounds:
         existing_low = bounds[0] if x_axis else bounds[1]
         existing_high = bounds[2] if x_axis else bounds[3]
         existing_center = (existing_low + existing_high) / 2.0
         for value in (
-            existing_high - local_low,
-            existing_low - local_high,
-            existing_low - local_low,
-            existing_high - local_high,
-            existing_center - local_center,
+            existing_high - anchor_local_low,
+            existing_low - anchor_local_high,
+            existing_low - anchor_local_low,
+            existing_high - anchor_local_high,
+            existing_center - anchor_center,
         ):
             _add_if_in_range(values, value, minimum_center, maximum_center)
     return sorted(values)
@@ -143,11 +192,11 @@ def _candidate_positions(
     tool: ToolObject,
     prototype: ToolPlacement,
     layout: LayoutState,
-    existing_geometries: list[BaseGeometry],
+    existing_geometries: list[_PackingGeometry],
 ) -> list[ToolPlacement]:
     boundary = usable_boundary_polygon(layout)
     bminx, bminy, bmaxx, bmaxy = boundary.bounds
-    existing_bounds = [geometry.bounds for geometry in existing_geometries]
+    existing_bounds = [geometry.search.bounds for geometry in existing_geometries]
     candidates: list[ToolPlacement] = []
 
     for rotation in rotation_candidates(prototype):
@@ -159,13 +208,28 @@ def _candidate_positions(
             is_placed=True,
         )
         geometry = _geometry_for(tool, at_origin, layout)
-        gminx, gminy, gmaxx, gmaxy = geometry.bounds
+        bound_minx, bound_miny, bound_maxx, bound_maxy = geometry.boundary.bounds
+        search_minx, search_miny, search_maxx, search_maxy = geometry.search.bounds
 
         xs = _axis_candidates(
-            bminx, bmaxx, gminx, gmaxx, existing_bounds, x_axis=True
+            bminx,
+            bmaxx,
+            bound_minx,
+            bound_maxx,
+            search_minx,
+            search_maxx,
+            existing_bounds,
+            x_axis=True,
         )
         ys = _axis_candidates(
-            bminy, bmaxy, gminy, gmaxy, existing_bounds, x_axis=False
+            bminy,
+            bmaxy,
+            bound_miny,
+            bound_maxy,
+            search_miny,
+            search_maxy,
+            existing_bounds,
+            x_axis=False,
         )
         for y in ys:
             for x in xs:
@@ -180,12 +244,12 @@ def _candidate_positions(
                 )
 
         # A bounded coarse fallback catches usable interior pockets that are not
-        # represented by simple edge-contact anchors. It is deterministic and
-        # intentionally coarse; edge candidates remain the primary search.
-        min_center_x = bminx - gminx
-        max_center_x = bmaxx - gmaxx
-        min_center_y = bminy - gminy
-        max_center_y = bmaxy - gmaxy
+        # represented by simple edge-contact anchors. Border limits are based on
+        # cavity + exact grab access, never on tool-to-tool structural spacing.
+        min_center_x = bminx - bound_minx
+        max_center_x = bmaxx - bound_maxx
+        min_center_y = bminy - bound_miny
+        max_center_y = bmaxy - bound_maxy
         for y in _coarse_axis_values(min_center_y, max_center_y):
             for x in _coarse_axis_values(min_center_x, max_center_x):
                 candidates.append(
@@ -213,18 +277,29 @@ def _best_candidate(
     tool: ToolObject,
     prototype: ToolPlacement,
     layout: LayoutState,
-    existing_geometries: list[BaseGeometry],
-) -> tuple[ToolPlacement, BaseGeometry] | None:
+    existing_geometries: list[_PackingGeometry],
+) -> tuple[ToolPlacement, _PackingGeometry] | None:
     boundary = usable_boundary_polygon(layout)
-    best: tuple[tuple[float, float, float, float, float], tuple[float, float, float], ToolPlacement, BaseGeometry] | None = None
+    score_geometries = [geometry.boundary for geometry in existing_geometries]
+    best: tuple[
+        tuple[float, float, float, float, float],
+        tuple[float, float, float],
+        ToolPlacement,
+        _PackingGeometry,
+    ] | None = None
 
-    for candidate in _candidate_positions(tool, prototype, layout, existing_geometries):
+    for candidate in _candidate_positions(
+        tool,
+        prototype,
+        layout,
+        existing_geometries,
+    ):
         geometry = _geometry_for(tool, candidate, layout)
-        if not boundary.covers(geometry):
+        if not boundary.covers(geometry.boundary):
             continue
-        if _overlaps_any(geometry, existing_geometries):
+        if _conflicts(geometry, existing_geometries):
             continue
-        score = candidate_score(candidate, geometry, existing_geometries)
+        score = candidate_score(candidate, geometry.boundary, score_geometries)
         stable = (-candidate.rotation_deg, -candidate.y_mm, -candidate.x_mm)
         record = (score, stable, candidate, geometry)
         if best is None or record[:2] > best[:2]:
@@ -245,8 +320,7 @@ def pack_layout(
 
     source = _placement_map(layout)
     working: dict[str, ToolPlacement] = {}
-    existing_geometries: list[BaseGeometry] = []
-    tools_by_id = {tool.id: tool for tool in project.tools}
+    existing_geometries: list[_PackingGeometry] = []
 
     for tool in project.tools:
         original = source.get(tool.id, ToolPlacement(tool_id=tool.id))
