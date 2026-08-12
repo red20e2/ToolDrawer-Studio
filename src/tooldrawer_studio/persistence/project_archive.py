@@ -12,6 +12,7 @@ from tooldrawer_studio.domain.models import (
     Project,
     ToolObject,
 )
+from tooldrawer_studio.layout.models import LayoutState, ToolPlacement
 from tooldrawer_studio.measurement.models import ImagePoint
 from tooldrawer_studio.persistence.migrations import (
     CURRENT_SCHEMA_VERSION,
@@ -55,6 +56,82 @@ def _optional_float(value: object) -> float | None:
     return None if value is None else float(value)
 
 
+def _placement_to_dict(placement: ToolPlacement) -> dict:
+    return {
+        "tool_id": placement.tool_id,
+        "x_mm": placement.x_mm,
+        "y_mm": placement.y_mm,
+        "rotation_deg": placement.rotation_deg,
+        "locked": placement.locked,
+        "rotation_policy": placement.rotation_policy,
+        "grab_side": placement.grab_side,
+        "grab_clearance_override_mm": placement.grab_clearance_override_mm,
+        "is_placed": placement.is_placed,
+    }
+
+
+def _placement_from_dict(data: dict) -> ToolPlacement:
+    return ToolPlacement(
+        tool_id=str(data["tool_id"]),
+        x_mm=float(data.get("x_mm", 0.0)),
+        y_mm=float(data.get("y_mm", 0.0)),
+        rotation_deg=float(data.get("rotation_deg", 0.0)),
+        locked=bool(data.get("locked", False)),
+        rotation_policy=str(data.get("rotation_policy", "free")),
+        grab_side=str(data.get("grab_side", "none")),
+        grab_clearance_override_mm=_optional_float(
+            data.get("grab_clearance_override_mm")
+        ),
+        is_placed=bool(data.get("is_placed", False)),
+    )
+
+
+def _layout_to_dict(layout: LayoutState | None) -> dict | None:
+    if layout is None:
+        return None
+    return {
+        "mode": layout.mode,
+        "foam_width_mm": layout.foam_width_mm,
+        "foam_height_mm": layout.foam_height_mm,
+        "grid_columns": layout.grid_columns,
+        "grid_rows": layout.grid_rows,
+        "grid_pitch_mm": layout.grid_pitch_mm,
+        "spacing_mm": layout.spacing_mm,
+        "border_mm": layout.border_mm,
+        "grab_clearance_mm": layout.grab_clearance_mm,
+        "snap_enabled": layout.snap_enabled,
+        "snap_increment_mm": layout.snap_increment_mm,
+        "placements": [_placement_to_dict(item) for item in layout.placements],
+        "unplaced_tool_ids": list(layout.unplaced_tool_ids),
+        "review_required": layout.review_required,
+    }
+
+
+def _layout_from_dict(data: dict | None) -> LayoutState | None:
+    if data is None:
+        return None
+    return LayoutState(
+        mode=str(data["mode"]),
+        foam_width_mm=_optional_float(data.get("foam_width_mm")),
+        foam_height_mm=_optional_float(data.get("foam_height_mm")),
+        grid_columns=(
+            None if data.get("grid_columns") is None else int(data["grid_columns"])
+        ),
+        grid_rows=None if data.get("grid_rows") is None else int(data["grid_rows"]),
+        grid_pitch_mm=float(data.get("grid_pitch_mm", 42.0)),
+        spacing_mm=float(data.get("spacing_mm", 3.0)),
+        border_mm=float(data.get("border_mm", 4.0)),
+        grab_clearance_mm=float(data.get("grab_clearance_mm", 12.0)),
+        snap_enabled=bool(data.get("snap_enabled", False)),
+        snap_increment_mm=float(data.get("snap_increment_mm", 1.0)),
+        placements=[
+            _placement_from_dict(item) for item in data.get("placements", [])
+        ],
+        unplaced_tool_ids=[str(item) for item in data.get("unplaced_tool_ids", [])],
+        review_required=bool(data.get("review_required", False)),
+    )
+
+
 def _project_to_dict(project: Project) -> dict:
     return {
         "id": project.id,
@@ -62,6 +139,12 @@ def _project_to_dict(project: Project) -> dict:
         "schema_version": project.schema_version,
         "default_exposed_height_mm": project.default_exposed_height_mm,
         "default_bottom_clearance_mm": project.default_bottom_clearance_mm,
+        "default_layout_spacing_mm": project.default_layout_spacing_mm,
+        "default_layout_border_mm": project.default_layout_border_mm,
+        "default_grab_clearance_mm": project.default_grab_clearance_mm,
+        "default_snap_increment_mm": project.default_snap_increment_mm,
+        "gridfinity_pitch_mm": project.gridfinity_pitch_mm,
+        "layout": _layout_to_dict(project.layout),
         "captures": [
             {
                 "id": capture.id,
@@ -224,6 +307,12 @@ def _project_from_dict(data: dict) -> Project:
         default_bottom_clearance_mm=float(
             data.get("default_bottom_clearance_mm", 0.8)
         ),
+        default_layout_spacing_mm=float(data.get("default_layout_spacing_mm", 3.0)),
+        default_layout_border_mm=float(data.get("default_layout_border_mm", 4.0)),
+        default_grab_clearance_mm=float(data.get("default_grab_clearance_mm", 12.0)),
+        default_snap_increment_mm=float(data.get("default_snap_increment_mm", 1.0)),
+        gridfinity_pitch_mm=float(data.get("gridfinity_pitch_mm", 42.0)),
+        layout=_layout_from_dict(data.get("layout")),
     )
 
 
