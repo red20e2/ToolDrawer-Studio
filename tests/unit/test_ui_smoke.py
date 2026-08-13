@@ -56,7 +56,7 @@ def test_main_window_constructs_with_six_workflow_stages():
         "2. Detect & Edit",
         "3. Measure",
         "4. Arrange",
-        "5. Pocket Settings",
+        "5. Generate",
         "6. Save & Export",
     ]
     assert isinstance(window.calibration_view, CalibrationImageView)
@@ -67,7 +67,8 @@ def test_main_window_constructs_with_six_workflow_stages():
     assert window.low_confidence_override.isHidden()
     assert not hasattr(window, "tool_depth")
     assert not hasattr(window, "pocket_depth")
-    assert window.pocket_depth_label.text() == "No resolved pocket depth"
+    assert not hasattr(window, "pocket_depth_label")
+    assert window.generate_panel.generate_button.text() == "Generate Organizer"
     window.close()
     assert app is not None
 
