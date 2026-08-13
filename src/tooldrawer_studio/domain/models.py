@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from tooldrawer_studio.generation.models import GenerationSettings, GenerationState
 from tooldrawer_studio.measurement.models import ImagePoint
 
 if TYPE_CHECKING:
@@ -68,7 +69,7 @@ class ToolObject:
 class Project:
     id: str
     name: str
-    schema_version: int = 3
+    schema_version: int = 4
     captures: list[CaptureAsset] = field(default_factory=list)
     calibrations: list[CalibrationRecord] = field(default_factory=list)
     tools: list[ToolObject] = field(default_factory=list)
@@ -80,3 +81,5 @@ class Project:
     default_snap_increment_mm: float = 1.0
     gridfinity_pitch_mm: float = 42.0
     layout: LayoutState | None = None
+    generation_settings: GenerationSettings = field(default_factory=GenerationSettings)
+    generation_state: GenerationState = field(default_factory=GenerationState)
