@@ -41,7 +41,15 @@ def _project() -> Project:
     return Project(id="p", name="Drawer", tools=[a, b], layout=layout)
 
 
-def _grid_project(*, center: tuple[float, float], size: float, depth: float) -> Project:
+def _grid_project(
+    *,
+    center: tuple[float, float],
+    size: float,
+    depth: float,
+    border_mm: float = 4.0,
+    grab_side: str = "none",
+    grab_override_mm: float | None = None,
+) -> Project:
     half = size / 2.0
     contour = [
         Point2D(-half, -half),
@@ -63,13 +71,14 @@ def _grid_project(*, center: tuple[float, float], size: float, depth: float) -> 
         grid_columns=1,
         grid_rows=1,
         grid_pitch_mm=42.0,
-        border_mm=4.0,
+        border_mm=border_mm,
         placements=[
             ToolPlacement(
                 tool_id=tool.id,
                 x_mm=center[0],
                 y_mm=center[1],
-                grab_side="none",
+                grab_side=grab_side,
+                grab_clearance_override_mm=grab_override_mm,
                 is_placed=True,
             )
         ],
@@ -189,3 +198,19 @@ def test_lip_only_interference_is_locally_omitted_with_warning():
     result = validate_generation(project, body_height_mm=21.0)
     assert result.valid
     assert any(issue.code == "stacking_lip_omitted" for issue in result.issues)
+
+
+def test_scoop_only_lip_interference_is_reported_as_omission_warning():
+    project = _grid_project(
+        center=(6.0, 21.0),
+        size=1.0,
+        depth=6.0,
+        border_mm=0.0,
+        grab_side="left",
+        grab_override_mm=2.0,
+    )
+    result = validate_generation(project, body_height_mm=21.0)
+    assert result.valid
+    warnings = [issue for issue in result.issues if issue.code == "stacking_lip_omitted"]
+    assert warnings
+    assert any("scoop" in issue.message.lower() for issue in warnings)
