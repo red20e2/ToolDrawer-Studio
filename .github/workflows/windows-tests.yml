@@ -21,6 +21,18 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: Install package and test dependencies
         run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Toolchain versions
+        shell: pwsh
+        run: |
+          python --version
+          $Candidates = @(
+            (Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6\ISCC.exe"),
+            (Join-Path $env:ProgramFiles "Inno Setup 6\ISCC.exe")
+          )
+          $Iscc = $Candidates | Where-Object { $_ -and (Test-Path $_ -PathType Leaf) } | Select-Object -First 1
+          if (-not $Iscc) { throw "ISCC.exe not found" }
+          $Version = (Get-Item $Iscc).VersionInfo.FileVersion
+          Write-Host "iscc=$Iscc version=$Version"
       - name: Import and bytecode sanity
         run: |
           python -m compileall -q src tests
@@ -36,3 +48,12 @@ jobs:
       - name: Verify frozen Windows app
         shell: pwsh
         run: ./packaging/verify_frozen.ps1
+      - name: Build release artifacts
+        shell: pwsh
+        run: ./packaging/build_artifacts.ps1
+      - name: Upload Windows release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ToolDrawer-Studio-0.1.0-Windows
+          path: artifacts/
+          if-no-files-found: error
