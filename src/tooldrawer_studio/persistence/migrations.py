@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-CURRENT_SCHEMA_VERSION = 3
+from tooldrawer_studio.generation.models import (
+    generation_settings_defaults_dict,
+    generation_state_defaults_dict,
+)
+
+CURRENT_SCHEMA_VERSION = 4
 
 
 def _migrate_v1_to_v2(data: dict) -> dict:
@@ -42,6 +47,14 @@ def _migrate_v2_to_v3(data: dict) -> dict:
     return migrated
 
 
+def _migrate_v3_to_v4(data: dict) -> dict:
+    migrated = deepcopy(data)
+    migrated["schema_version"] = 4
+    migrated.setdefault("generation_settings", generation_settings_defaults_dict())
+    migrated.setdefault("generation_state", generation_state_defaults_dict())
+    return migrated
+
+
 def migrate_project_dict(data: dict, from_version: int) -> dict:
     version = int(from_version)
     if version < 1 or version > CURRENT_SCHEMA_VERSION:
@@ -56,6 +69,9 @@ def migrate_project_dict(data: dict, from_version: int) -> dict:
     if version == 2:
         migrated = _migrate_v2_to_v3(migrated)
         version = 3
+    if version == 3:
+        migrated = _migrate_v3_to_v4(migrated)
+        version = 4
     if version != CURRENT_SCHEMA_VERSION:
         raise ValueError(f"Unsupported project schema version: {version}")
     return migrated
