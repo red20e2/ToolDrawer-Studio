@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtWidgets import QFileDialog, QMessageBox
 
 from tooldrawer_studio.preferences import Preferences
+from tooldrawer_studio.project_state import ProjectEditTracker
 from tooldrawer_studio.ui.main_window import MainWindow
 from tooldrawer_studio.ui.workflow_controller import WorkflowController
 
@@ -15,6 +16,7 @@ class ReleaseMainWindow(MainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.preferences = Preferences.load()
+        self.project_edit_tracker = ProjectEditTracker(self.controller.project)
 
     def _dialog_directory(self, kind: str) -> str:
         values = {
@@ -39,6 +41,24 @@ class ReleaseMainWindow(MainWindow):
         self.preferences.set_photo_import_directory(path)
         self.preferences.save()
 
+    def _confirm_discard_unsaved(self) -> bool:
+        if not self.project_edit_tracker.has_unsaved_changes():
+            return True
+        choice = QMessageBox.question(
+            self,
+            "Unsaved changes",
+            "Save changes before continuing?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if choice == QMessageBox.StandardButton.Save:
+            return bool(self._save_project())
+        if choice == QMessageBox.StandardButton.Discard:
+            return True
+        return False
+
     def _import_photo(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
             self,
@@ -46,19 +66,22 @@ class ReleaseMainWindow(MainWindow):
             self._dialog_directory("photo"),
             "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
         )
-        if not filename:
+        if not filename or not self._confirm_discard_unsaved():
             return
         try:
             path = Path(filename)
-            self.controller = WorkflowController()
+            new_controller = WorkflowController()
+            new_tracker = ProjectEditTracker(new_controller.project)
+            new_controller.import_image(path)
+            self.controller = new_controller
+            self.project_edit_tracker = new_tracker
             self._measurement_warnings.clear()
-            self.controller.import_image(path)
             self._reset_for_uncalibrated_active_image()
             self._remember_photo_directory(path.parent)
         except Exception as exc:
             self._show_error(exc)
 
-    def _save_project(self) -> None:
+    def _save_project(self) -> bool:
         filename, _ = QFileDialog.getSaveFileName(
             self,
             "Save ToolDrawer Project",
@@ -66,16 +89,19 @@ class ReleaseMainWindow(MainWindow):
             "ToolDrawer Studio (*.tds)",
         )
         if not filename:
-            return
+            return False
         try:
             path = Path(filename)
             if path.suffix.lower() != ".tds":
                 path = path.with_suffix(".tds")
             self.controller.save(path)
+            self.project_edit_tracker.mark_saved()
             self._remember_project_path(path)
             self.export_status.setText(f"Saved {path}")
+            return True
         except Exception as exc:
             self._show_error(exc)
+            return False
 
     def _open_project(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(
@@ -84,11 +110,13 @@ class ReleaseMainWindow(MainWindow):
             self._dialog_directory("project"),
             "ToolDrawer Studio (*.tds)",
         )
-        if not filename:
+        if not filename or not self._confirm_discard_unsaved():
             return
         try:
             path = Path(filename)
-            self.controller = WorkflowController.open(path)
+            new_controller = WorkflowController.open(path)
+            self.controller = new_controller
+            self.project_edit_tracker = ProjectEditTracker(new_controller.project)
             self._measurement_warnings.clear()
             if self.controller.project.tools:
                 self.controller.activate_capture(
@@ -143,3 +171,9 @@ class ReleaseMainWindow(MainWindow):
             self._remember_export_directory(path)
         except Exception as exc:
             self._show_error(exc)
+
+    def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
+        if self.isVisible() and not self._confirm_discard_unsaved():
+            event.ignore()
+            return
+        super().closeEvent(event)
