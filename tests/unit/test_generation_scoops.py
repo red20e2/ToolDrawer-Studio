@@ -128,6 +128,37 @@ def test_scoop_never_breaks_minimum_floor():
     assert result.depth_mm <= 5.0 + 1e-9
 
 
+def test_scoop_respects_default_arrange_grab_clearance():
+    project = _project()
+    project.layout.grab_clearance_mm = 4.0
+    result = build_scoop_cutter(
+        project.tools[0],
+        project.layout.placements[0],
+        project.layout,
+        project.generation_settings,
+        12.0,
+        6.0,
+    )
+    assert result is not None
+    assert result.shrunk is True
+    assert result.depth_mm <= 2.5 + 1e-9
+
+
+def test_scoop_respects_per_tool_grab_clearance_override():
+    project = _project()
+    project.layout.placements[0].grab_clearance_override_mm = 3.2
+    result = build_scoop_cutter(
+        project.tools[0],
+        project.layout.placements[0],
+        project.layout,
+        project.generation_settings,
+        12.0,
+        6.0,
+    )
+    assert result is not None
+    assert result.depth_mm <= 2.0 + 1e-9
+
+
 def test_impossible_scoop_returns_validation_error_not_silent_geometry_change():
     project = _project(x_mm=78.0)
     project.generation_settings.minimum_wall_mm = 10.0
