@@ -18,10 +18,10 @@ def _measurement_tool() -> ToolObject:
     )
 
 
-def test_project_starts_with_schema_version_three_and_measurement_layout_defaults():
+def test_project_starts_with_schema_version_four_and_measurement_layout_generation_defaults():
     project = Project(id="project-1", name="Drawer A")
 
-    assert project.schema_version == 3
+    assert project.schema_version == 4
     assert project.default_exposed_height_mm == 4.0
     assert project.default_bottom_clearance_mm == 0.8
     assert project.default_layout_spacing_mm == 3.0
@@ -30,6 +30,10 @@ def test_project_starts_with_schema_version_three_and_measurement_layout_default
     assert project.default_snap_increment_mm == 1.0
     assert project.gridfinity_pitch_mm == 42.0
     assert project.layout is None
+    assert project.generation_settings.minimum_floor_mm == 2.0
+    assert project.generation_settings.minimum_wall_mm == 2.0
+    assert project.generation_state.last_generated_fingerprint is None
+    assert project.generation_state.review_required is True
 
 
 def test_new_tool_has_no_measurement_or_pocket_override():
