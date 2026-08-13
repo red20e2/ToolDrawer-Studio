@@ -22,6 +22,7 @@ jobs:
         run: |
           python scripts/apply_generate_integration_patch.py
           python scripts/apply_generate_main_window_patch_v2.py
+          python scripts/apply_generate_readme_patch.py
       - name: Commit patch if needed
         shell: bash
         run: |
@@ -31,6 +32,6 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/tooldrawer_studio/ui/workflow_controller.py src/tooldrawer_studio/ui/main_window.py
-          git commit -m "feat: integrate generate workflow into main window"
+          git add src/tooldrawer_studio/ui/workflow_controller.py src/tooldrawer_studio/ui/main_window.py README.md
+          git commit -m "docs: document Generate manufacturing workflow"
           git push origin HEAD:feature/v0.1-generate-manufacturing
