@@ -1186,20 +1186,6 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._show_error(exc)
 
-    def _configure_pocket(self) -> None:
-        try:
-            self.controller.configure_pocket(
-                self.base_width.value(),
-                self.base_height.value(),
-                self.base_thickness.value(),
-                pocket_depth_mm=None,
-            )
-            self.pocket_status.setText("Pocket settings applied")
-            self.tabs.setTabEnabled(5, True)
-            self.tabs.setCurrentIndex(5)
-        except Exception as exc:
-            self._show_error(exc)
-
     def _save_project(self) -> None:
         filename, _ = QFileDialog.getSaveFileName(
             self,
@@ -1290,9 +1276,7 @@ class MainWindow(QMainWindow):
                 for path in (paths.step, paths.stl, paths.dxf)
                 if path is not None
             ]
-            self.export_status.setText("Exported:
-" + "
-".join(exported))
+            self.export_status.setText("Exported:\n" + "\n".join(exported))
         except Exception as exc:
             self._show_error(exc)
 
