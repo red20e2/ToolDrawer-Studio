@@ -10,16 +10,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from tooldrawer_studio import __version__
-from tooldrawer_studio.ui.main_window import MainWindow
+from tooldrawer_studio.__main__ import build_main_window
 
 
 ROOT = Path(__file__).resolve().parents[2]
 CHECKER = ROOT / "packaging" / "check_version.py"
 
 
-def test_runtime_version_and_window_title_use_0_1_0():
+def test_runtime_version_and_launched_window_use_0_1_0():
     app = QApplication.instance() or QApplication([])
-    window = MainWindow()
+    window = build_main_window()
     try:
         assert __version__ == "0.1.0"
         assert window.windowTitle() == "ToolDrawer Studio 0.1.0"
