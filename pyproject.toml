@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tooldrawer-studio"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Local-first tool tracing and organizer design for Windows"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -20,6 +20,9 @@ dependencies = [
 dev = [
   "pytest>=8,<9",
 ]
+
+[tool.hatch.version]
+path = "src/tooldrawer_studio/version.py"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
