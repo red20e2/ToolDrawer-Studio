@@ -21,3 +21,13 @@ def test_release_hashes_are_sorted_and_named(tmp_path):
 
     assert [line.split("  ", 1)[1] for line in lines] == [setup.name, portable.name]
     assert all(len(line.split("  ", 1)[0]) == 64 for line in lines)
+
+
+def test_release_builder_creates_named_installer_portable_and_hashes():
+    script = (_root() / "packaging" / "build_artifacts.ps1").read_text(encoding="utf-8")
+    assert "ToolDrawer-Studio-$AppVersion-Setup.exe" in script
+    assert "ToolDrawer-Studio-$AppVersion-Portable.zip" in script
+    assert "SHA256SUMS.txt" in script
+    assert "/DAppVersion=$AppVersion" in script
+    assert "Compress-Archive" in script
+    assert "write_hashes.py" in script
