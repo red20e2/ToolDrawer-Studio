@@ -69,6 +69,13 @@ def test_fingerprint_changes_when_manufacturing_input_changes():
     assert generation_fingerprint(project) != before
 
 
+def test_fingerprint_changes_when_arrange_grab_clearance_changes():
+    project = _foam_project()
+    before = generation_fingerprint(project)
+    project.layout.grab_clearance_mm = 4.0
+    assert generation_fingerprint(project) != before
+
+
 def test_fingerprint_ignores_generation_state():
     project = _foam_project()
     before = generation_fingerprint(project)
