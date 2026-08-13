@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 def _migrate_v1_to_v2(data: dict) -> dict:
@@ -30,6 +30,18 @@ def _migrate_v1_to_v2(data: dict) -> dict:
     return migrated
 
 
+def _migrate_v2_to_v3(data: dict) -> dict:
+    migrated = deepcopy(data)
+    migrated["schema_version"] = 3
+    migrated.setdefault("default_layout_spacing_mm", 3.0)
+    migrated.setdefault("default_layout_border_mm", 4.0)
+    migrated.setdefault("default_grab_clearance_mm", 12.0)
+    migrated.setdefault("default_snap_increment_mm", 1.0)
+    migrated.setdefault("gridfinity_pitch_mm", 42.0)
+    migrated.setdefault("layout", None)
+    return migrated
+
+
 def migrate_project_dict(data: dict, from_version: int) -> dict:
     version = int(from_version)
     if version < 1 or version > CURRENT_SCHEMA_VERSION:
@@ -41,6 +53,9 @@ def migrate_project_dict(data: dict, from_version: int) -> dict:
     if version == 1:
         migrated = _migrate_v1_to_v2(migrated)
         version = 2
+    if version == 2:
+        migrated = _migrate_v2_to_v3(migrated)
+        version = 3
     if version != CURRENT_SCHEMA_VERSION:
         raise ValueError(f"Unsupported project schema version: {version}")
     return migrated

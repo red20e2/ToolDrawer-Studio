@@ -31,6 +31,8 @@ from tooldrawer_studio.capture.phone_server import PhoneUploadServer
 from tooldrawer_studio.capture.phone_session import PhoneSession
 from tooldrawer_studio.capture.webcam import WebcamCaptureService
 from tooldrawer_studio.domain.models import CalibrationRecord, Point2D, ToolObject
+from tooldrawer_studio.ui.arrange_panel import ArrangePanel
+from tooldrawer_studio.ui.arrangement_view import ArrangementView
 from tooldrawer_studio.ui.calibration_view import CalibrationImageView
 from tooldrawer_studio.ui.capture_tray import CaptureTrayWidget, qr_image
 from tooldrawer_studio.ui.contour_editor import ContourEditor
@@ -66,9 +68,13 @@ class MainWindow(QMainWindow):
         self.measure_panel = MeasurePanel()
         self._connect_measure_panel()
         self.tabs.addTab(self.measure_panel, "3. Measure")
-        self.tabs.addTab(self._pocket_stage(), "4. Pocket Settings")
-        self.tabs.addTab(self._export_stage(), "5. Save & Export")
-        for index in (1, 2, 3, 4):
+        self.arrange_panel = ArrangePanel()
+        self.arrangement_view = ArrangementView()
+        self._connect_arrange()
+        self.tabs.addTab(self._arrange_stage(), "4. Arrange")
+        self.tabs.addTab(self._pocket_stage(), "5. Pocket Settings")
+        self.tabs.addTab(self._export_stage(), "6. Save & Export")
+        for index in (1, 2, 3, 4, 5):
             self.tabs.setTabEnabled(index, False)
 
         self.capture_poll_timer = QTimer(self)
@@ -267,6 +273,24 @@ class MainWindow(QMainWindow):
         layout.addLayout(right, 3)
         return page
 
+    def _arrange_stage(self) -> QWidget:
+        page = QWidget()
+        layout = QHBoxLayout(page)
+        layout.addWidget(self.arrange_panel, 1)
+        right = QVBoxLayout()
+        right.addWidget(self.arrangement_view, 1)
+        actions = QHBoxLayout()
+        undo_button = QPushButton("Undo Arrange")
+        redo_button = QPushButton("Redo Arrange")
+        undo_button.clicked.connect(self.arrangement_view.undo_stack.undo)
+        redo_button.clicked.connect(self.arrangement_view.undo_stack.redo)
+        actions.addWidget(undo_button)
+        actions.addWidget(redo_button)
+        actions.addStretch()
+        right.addLayout(actions)
+        layout.addLayout(right, 3)
+        return page
+
     def _pocket_stage(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -327,6 +351,26 @@ class MainWindow(QMainWindow):
             self._measure_pocket_override_changed
         )
         self.measure_panel.endpointsChanged.connect(self._measure_endpoints_changed)
+
+    def _connect_arrange(self) -> None:
+        self.arrange_panel.layoutRequested.connect(self._arrange_layout_requested)
+        self.arrange_panel.defaultsChanged.connect(self._arrange_defaults_changed)
+        self.arrange_panel.snapChanged.connect(self._arrange_snap_changed)
+        self.arrange_panel.autoArrangeRequested.connect(self._arrange_auto)
+        self.arrange_panel.repackRequested.connect(self._arrange_repack)
+        self.arrange_panel.rotationPolicyChanged.connect(self._arrange_rotation_policy)
+        self.arrange_panel.grabSideChanged.connect(self._arrange_grab_side)
+        self.arrange_panel.grabOverrideChanged.connect(self._arrange_grab_override)
+        self.arrange_panel.lockChanged.connect(self._arrange_lock)
+        self.arrange_panel.rotateRequested.connect(self._arrange_rotate)
+        self.arrange_panel.alignRequested.connect(self._arrange_align)
+        self.arrange_panel.distributeRequested.connect(self._arrange_distribute)
+        self.arrangement_view.placementsCommitted.connect(
+            self._arrange_placements_committed
+        )
+        self.arrangement_view.selectionChanged.connect(
+            self._arrange_selection_changed
+        )
 
     def _show_error(self, exc: Exception) -> None:
         QMessageBox.critical(self, "ToolDrawer Studio", str(exc))
@@ -419,8 +463,10 @@ class MainWindow(QMainWindow):
         self.low_confidence_override.setChecked(False)
         self.low_confidence_override.setVisible(False)
         self.tool_list.clear()
-        for index in (1, 2, 3, 4):
+        for index in (1, 2, 3, 4, 5):
             self.tabs.setTabEnabled(index, False)
+        self.arrangement_view.scene.clear()
+        self.arrangement_view.undo_stack.clear()
         self.tabs.setCurrentIndex(0)
 
     def _import_photo(self) -> None:
@@ -583,6 +629,7 @@ class MainWindow(QMainWindow):
             self._populate_tools(tools)
             if tools:
                 self.tabs.setTabEnabled(2, True)
+                self.tabs.setTabEnabled(3, True)
         except Exception as exc:
             self._show_error(exc)
 
@@ -611,6 +658,7 @@ class MainWindow(QMainWindow):
             self.vertex_index.setMaximum(max(0, len(tool.contour_mm) - 1))
             self.contour_editor.set_tool(tool)
             self.tabs.setTabEnabled(2, True)
+            self.tabs.setTabEnabled(3, True)
             self._refresh_measure_state()
         except Exception as exc:
             self._show_error(exc)
@@ -618,6 +666,7 @@ class MainWindow(QMainWindow):
     def _contour_changed(self, points: list[Point2D]) -> None:
         try:
             self.controller.replace_contour(self.controller.selected_tool().id, points)
+            self._refresh_arrange_state()
         except Exception as exc:
             self._show_error(exc)
 
@@ -660,6 +709,7 @@ class MainWindow(QMainWindow):
     def _reset_trace(self) -> None:
         try:
             self.contour_editor.reset_to_base()
+            self._refresh_arrange_state()
         except Exception as exc:
             self._show_error(exc)
 
@@ -738,9 +788,196 @@ class MainWindow(QMainWindow):
                 endpoint_b,
             )
 
-        self.tabs.setTabEnabled(3, final is not None)
+        self.tabs.setTabEnabled(3, bool(self.controller.project.tools))
+        self.tabs.setTabEnabled(4, final is not None)
         if final is None:
-            self.tabs.setTabEnabled(4, False)
+            self.tabs.setTabEnabled(5, False)
+        self._refresh_arrange_state()
+
+    def _refresh_arrange_state(self, *, sync_view: bool = True) -> None:
+        project = self.controller.project
+        layout = project.layout
+        if layout is None:
+            if sync_view:
+                self.arrangement_view.scene.clear()
+                self.arrangement_view.undo_stack.clear()
+            self.arrange_panel.set_state(
+                project,
+                None,
+                None,
+                placed_count=0,
+                total_count=len(project.tools),
+                validation_messages=(),
+            )
+            return
+
+        validation = self.controller.validate_arrangement()
+        if sync_view:
+            self.arrangement_view.set_project_layout(project, layout, validation)
+        try:
+            selected_tool = self.controller.selected_tool()
+            selected_placement = layout.placement_for(selected_tool.id)
+        except ValueError:
+            selected_placement = None
+        placed_count = sum(1 for placement in layout.placements if placement.is_placed)
+        self.arrange_panel.set_state(
+            project,
+            layout,
+            selected_placement,
+            placed_count=placed_count,
+            total_count=len(project.tools),
+            validation_messages=[issue.message for issue in validation.issues],
+        )
+
+    def _arrange_selection_changed(self, selected: object) -> None:
+        try:
+            if not isinstance(selected, set) or len(selected) != 1:
+                return
+            tool_id = str(next(iter(selected)))
+            self.controller.select_tool(tool_id)
+            self._refresh_arrange_state(sync_view=False)
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _arrange_layout_requested(self, payload: object) -> None:
+        try:
+            if not isinstance(payload, tuple) or not payload:
+                raise ValueError("Invalid layout request")
+            mode = payload[0]
+            if mode == "foam" and len(payload) == 3:
+                self.controller.configure_foam_layout(payload[1], payload[2])
+            elif mode == "gridfinity" and len(payload) == 4:
+                self.controller.configure_gridfinity_layout(
+                    int(payload[1]), int(payload[2]), float(payload[3])
+                )
+            else:
+                raise ValueError("Invalid layout request")
+            self.tabs.setTabEnabled(3, bool(self.controller.project.tools))
+            self._refresh_arrange_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _arrange_defaults_changed(self, change: object) -> None:
+        try:
+            name, value = change  # type: ignore[misc]
+            allowed = {
+                "spacing_mm",
+                "border_mm",
+                "grab_clearance_mm",
+                "snap_increment_mm",
+            }
+            if name not in allowed:
+                raise ValueError("Unknown Arrange default")
+            self.controller.set_layout_defaults(**{str(name): float(value)})
+            self._refresh_arrange_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _arrange_snap_changed(self, enabled: bool) -> None:
+        try:
+            self.controller.set_layout_snap(enabled)
+            self._refresh_arrange_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _arrange_auto(self) -> None:
+        try:
+            self.controller.auto_arrange()
+            self._refresh_arrange_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _arrange_repack(self) -> None:
+        try:
+            self.controller.repack_unlocked()
+            self._refresh_arrange_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _arrange_rotation_policy(self, policy: str) -> None:
+        try:
+            tool = self.controller.selected_tool()
+            self.controller.set_tool_layout_options(tool.id, rotation_policy=policy)
+            self._refresh_arrange_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _arrange_grab_side(self, grab_side: str) -> None:
+        try:
+            tool = self.controller.selected_tool()
+            self.controller.set_tool_layout_options(tool.id, grab_side=grab_side)
+            self._refresh_arrange_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _arrange_grab_override(self, value: object) -> None:
+        try:
+            tool = self.controller.selected_tool()
+            self.controller.set_tool_layout_options(
+                tool.id,
+                grab_clearance_override_mm=value,
+            )
+            self._refresh_arrange_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _arrange_lock(self, locked: bool) -> None:
+        try:
+            tool = self.controller.selected_tool()
+            self.controller.set_tool_locked(tool.id, locked)
+            self._refresh_arrange_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _arrange_rotate(self, rotation_deg: float) -> None:
+        try:
+            selected = sorted(self.arrangement_view.selected_tool_ids())
+            if selected:
+                self.arrangement_view.commit_rotation(selected, rotation_deg)
+            else:
+                tool = self.controller.selected_tool()
+                self.controller.rotate_tool(tool.id, rotation_deg)
+                self._refresh_arrange_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _arrange_align(self, mode: str) -> None:
+        try:
+            selected = sorted(self.arrangement_view.selected_tool_ids())
+            self.controller.align_tools(selected, mode)
+            self._refresh_arrange_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _arrange_distribute(self, axis: str) -> None:
+        try:
+            selected = sorted(self.arrangement_view.selected_tool_ids())
+            self.controller.distribute_tools(selected, axis)
+            self._refresh_arrange_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _arrange_placements_committed(self, payload: object) -> None:
+        try:
+            if not isinstance(payload, list):
+                raise ValueError("Invalid Arrange placement payload")
+            layout = self.controller.project.layout
+            if layout is None:
+                raise ValueError("Configure an Arrange layout first")
+            for record in payload:
+                if not isinstance(record, tuple) or len(record) != 4:
+                    raise ValueError("Invalid Arrange placement payload")
+                tool_id, x_mm, y_mm, rotation_deg = record
+                placement = layout.placement_for(str(tool_id))
+                if placement is None:
+                    raise KeyError(f"Unknown layout placement: {tool_id}")
+                prior_rotation = placement.rotation_deg
+                self.controller.move_tool(str(tool_id), float(x_mm), float(y_mm))
+                if abs((float(rotation_deg) - prior_rotation) % 360.0) > 1e-9:
+                    self.controller.rotate_tool(str(tool_id), float(rotation_deg))
+            self._refresh_arrange_state(sync_view=False)
+        except Exception as exc:
+            self._show_error(exc)
 
     def _measure_attach_side_view(self) -> None:
         try:
@@ -893,8 +1130,8 @@ class MainWindow(QMainWindow):
                 pocket_depth_mm=None,
             )
             self.pocket_status.setText("Pocket settings applied")
-            self.tabs.setTabEnabled(4, True)
-            self.tabs.setCurrentIndex(4)
+            self.tabs.setTabEnabled(5, True)
+            self.tabs.setCurrentIndex(5)
         except Exception as exc:
             self._show_error(exc)
 
@@ -965,10 +1202,13 @@ class MainWindow(QMainWindow):
             self._populate_tools()
             has_tools = bool(self.controller.project.tools)
             self.tabs.setTabEnabled(2, has_tools)
-            self.tabs.setTabEnabled(3, False)
+            self.tabs.setTabEnabled(3, has_tools)
             self.tabs.setTabEnabled(4, False)
+            self.tabs.setTabEnabled(5, False)
             if has_tools:
                 self._refresh_measure_state()
+            else:
+                self._refresh_arrange_state()
         except Exception as exc:
             self._show_error(exc)
 

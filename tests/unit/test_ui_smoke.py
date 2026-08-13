@@ -46,17 +46,18 @@ def _add_window_tool(window: MainWindow, capture_id: str) -> ToolObject:
     return tool
 
 
-def test_main_window_constructs_with_five_workflow_stages():
+def test_main_window_constructs_with_six_workflow_stages():
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
     assert window.windowTitle() == "ToolDrawer Studio"
-    assert window.tabs.count() == 5
-    assert [window.tabs.tabText(index) for index in range(5)] == [
+    assert window.tabs.count() == 6
+    assert [window.tabs.tabText(index) for index in range(6)] == [
         "1. Import & Calibrate",
         "2. Detect & Edit",
         "3. Measure",
-        "4. Pocket Settings",
-        "5. Save & Export",
+        "4. Arrange",
+        "5. Pocket Settings",
+        "6. Save & Export",
     ]
     assert isinstance(window.calibration_view, CalibrationImageView)
     assert isinstance(window.measure_panel, MeasurePanel)
@@ -147,7 +148,7 @@ def test_promote_pending_capture_adds_to_project_without_consuming_tray_item():
     assert window.controller.active_calibration is None
     assert [pending.id for pending in window.capture_session.items()] == [item.id]
     assert window.capture_tray.list_widget.count() == 1
-    assert all(window.tabs.isTabEnabled(index) is False for index in (1, 2, 3, 4))
+    assert all(window.tabs.isTabEnabled(index) is False for index in (1, 2, 3, 4, 5))
     window.close()
     assert app is not None
 

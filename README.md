@@ -2,7 +2,7 @@
 
 ToolDrawer Studio is a pre-release, open-source Windows desktop application for turning calibrated photographs of tools into editable organizer geometry.
 
-The current V0.1 foundation includes the dimensional core: import or capture source photos, calibrate pixels to millimetres, trace one or more tool silhouettes, refine contours without destroying the base trace, measure physical tool thickness from an independently calibrated side view, derive a pocket-depth suggestion, save/reopen editable `.tds` projects, generate a parametric pocket, and export STEP/STL/DXF manufacturing geometry.
+The current V0.1 foundation includes the dimensional core: import or capture source photos, calibrate pixels to millimetres, trace one or more tool silhouettes, refine contours without destroying the base trace, measure physical tool thickness from an independently calibrated side view, arrange calibrated tool cavities inside foam/drawer or Gridfinity boundaries, derive a pocket-depth suggestion, save/reopen editable `.tds` projects, generate a parametric pocket, and export STEP/STL/DXF manufacturing geometry.
 
 ## Capture workflow
 
@@ -103,9 +103,54 @@ The suggested depth and final manufacturing depth are separate. You can explicit
 
 Replacing or recalibrating a side-view image invalidates image-derived automatic/endpoint measurements. Exact manual thickness and explicit final pocket-depth overrides are preserved and flagged for review rather than silently discarded.
 
-`.tds` schema V2 stores side-view associations, calibrations, measurement geometry, confidence, accepted/manual values, project defaults, per-tool overrides, and final pocket-depth state. Existing V1 projects migrate non-destructively: the old `depth_mm` value is preserved exactly as the V2 explicit pocket-depth override. Reopening a project restores saved Measure state without automatically rerunning image analysis.
+Measure state was introduced in `.tds` schema V2 and remains preserved in the current V3 format. Existing V1 projects migrate non-destructively through V2 to V3: the old `depth_mm` value is preserved exactly as the explicit pocket-depth override. Reopening a project restores saved Measure state without automatically rerunning image analysis.
 
 Photo-derived measurements remain manufacturing aids rather than metrology-grade inspection data. Focus, lens distortion, calibration quality, shadows, reflections, silhouette ambiguity, and image resolution can all affect accuracy.
+
+## Arrange / layout workflow
+
+The **Arrange** stage lays calibrated tool cavities into one continuous rectangular organizer area. Packing and validation use the actual edited tool contour in millimetres rather than rectangular bounding boxes.
+
+Two boundary modes are available:
+
+- **Foam / drawer** - enter the exact inside width and depth in millimetres.
+- **Gridfinity** - enter columns and rows. The default pitch is **42.0 mm**, so a 6 x 5 layout is 252 x 210 mm. Gridfinity cell lines are visual guides only; tools may span cell boundaries because the usable region is treated as one continuous rectangular area.
+
+### Clearance and access rules
+
+Arrange deliberately keeps manufacturing fit allowance separate from organizer spacing:
+
+- **Pocket clearance** is stored per tool and expands the physical contour into the planned cleared cavity footprint.
+- **Layout spacing** is the minimum edge-to-edge separation between neighboring cleared cavity footprints. Default: **3.0 mm**.
+- **Border margin** is the minimum distance from a cleared cavity or required grab zone to the organizer boundary. Default: **4.0 mm**.
+- **Grab clearance** reserves additional removal space on a selected local side of a tool. Default: **12.0 mm**.
+- **Manual snap increment** affects editing only and defaults to **1.0 mm**. Stored placement coordinates remain canonical millimetres.
+
+Grab side may be none, left, right, top, or bottom. The selected side rotates with the tool. Grab clearance is a layout exclusion rule; it does not create finger-scoop CAD or mutate the source contour.
+
+Required spacing, boundary containment, grab access, locked placements, and rotation rules are hard constraints. Arrange never silently reduces them to force a fit.
+
+### Rotation, locks, and manual editing
+
+Each tool can use one rotation policy:
+
+- **Free** - Auto Arrange tests 15-degree increments; manual rotation may use arbitrary angles.
+- **90° only** - Auto Arrange tests 0, 90, 180, and 270 degrees.
+- **Fixed** - preserves the current/reference orientation.
+
+Tools may be locked. **Re-pack Unlocked** treats locked placements as immutable obstacles and preserves their exact X/Y position and rotation. Manual movement supports selection, multi-selection, alignment, distribution, and optional snapping. Arrange edits are undoable/redoable.
+
+Changing dimensions, spacing, a tool contour, or pocket clearance can mark the saved layout as requiring review, but it does not silently move tools. Repacking occurs only after an explicit **Auto Arrange** or **Re-pack Unlocked** command.
+
+### Automatic packing and partial fits
+
+Auto Arrange is deterministic: the same project geometry and settings produce the same result. Harder-to-place/restricted tools are considered before smaller flexible tools. Candidate layouts must satisfy all hard geometry rules before lower-priority practical-access, orientation-consistency, and compactness scoring is considered.
+
+If every requested tool cannot fit, Arrange keeps the best valid partial layout and records the remaining tool IDs as unplaced. It never overlaps cavities or weakens required spacing merely to increase the placed count.
+
+`.tds` schema V3 persists Arrange defaults, boundary settings, every tool placement, rotation policy, lock state, grab-side settings, explicit unplaced tools, and review-required state. V2 projects migrate to V3 non-destructively with no invented layout. Opening a saved project restores the exact saved placement state and never automatically repacks it.
+
+Arrange validates 2D layout geometry only. Final foam/Gridfinity solid generation remains responsible for confirming that the requested wall, base, and manufacturing geometry can actually be produced.
 
 ## Image import safety
 
