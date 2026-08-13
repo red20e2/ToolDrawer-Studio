@@ -98,6 +98,10 @@ def test_per_tool_scoop_mode_emits_tool_id_and_mode():
 
 def test_validation_and_currentness_are_actionable():
     panel = GeneratePanel()
+    project = _project()
+    project.generation_state.last_generated_fingerprint = "old-fingerprint"
+    project.generation_state.review_required = True
+    panel.set_project(project)
     panel.set_validation(
         GenerationValidationResult(
             False,
