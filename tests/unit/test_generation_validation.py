@@ -41,6 +41,43 @@ def _project() -> Project:
     return Project(id="p", name="Drawer", tools=[a, b], layout=layout)
 
 
+def _grid_project(*, center: tuple[float, float], size: float, depth: float) -> Project:
+    half = size / 2.0
+    contour = [
+        Point2D(-half, -half),
+        Point2D(half, -half),
+        Point2D(half, half),
+        Point2D(-half, half),
+    ]
+    tool = ToolObject(
+        id="g",
+        name="Grid Tool",
+        source_capture_id="capture-1",
+        base_contour_mm=list(contour),
+        contour_mm=list(contour),
+        clearance_mm=0.0,
+        pocket_depth_override_mm=depth,
+    )
+    layout = LayoutState(
+        mode="gridfinity",
+        grid_columns=1,
+        grid_rows=1,
+        grid_pitch_mm=42.0,
+        border_mm=4.0,
+        placements=[
+            ToolPlacement(
+                tool_id=tool.id,
+                x_mm=center[0],
+                y_mm=center[1],
+                grab_side="none",
+                is_placed=True,
+            )
+        ],
+        review_required=False,
+    )
+    return Project(id="gp", name="Grid", tools=[tool], layout=layout)
+
+
 def test_review_required_layout_blocks_generation():
     project = _project()
     project.layout.review_required = True
@@ -123,3 +160,32 @@ def test_issue_order_is_deterministic():
     second = validate_generation(project).issues
     assert first == second
     assert first == tuple(sorted(first, key=lambda issue: (issue.severity, issue.code, issue.tool_ids, issue.message)))
+
+
+def test_magnet_cavity_collision_is_hard_error():
+    project = _grid_project(center=(8.0, 8.0), size=4.0, depth=20.0)
+    result = validate_generation(project, body_height_mm=21.0)
+    assert any(issue.code == "gridfinity_magnet_collision" for issue in result.issues)
+
+
+def test_screw_cavity_collision_is_hard_error():
+    project = _grid_project(center=(8.0, 8.0), size=4.0, depth=16.0)
+    project.generation_settings.magnets_enabled = False
+    project.generation_settings.screw_holes_enabled = True
+    result = validate_generation(project, body_height_mm=21.0)
+    assert any(issue.code == "gridfinity_screw_collision" for issue in result.issues)
+
+
+def test_combined_holes_preserve_minimum_material():
+    project = _grid_project(center=(21.0, 21.0), size=4.0, depth=6.0)
+    project.generation_settings.screw_holes_enabled = True
+    project.generation_settings.screw_diameter_mm = 6.2
+    result = validate_generation(project, body_height_mm=21.0)
+    assert any(issue.code == "gridfinity_combined_hole" for issue in result.issues)
+
+
+def test_lip_only_interference_is_locally_omitted_with_warning():
+    project = _grid_project(center=(4.5, 21.0), size=1.0, depth=6.0)
+    result = validate_generation(project, body_height_mm=21.0)
+    assert result.valid
+    assert any(issue.code == "stacking_lip_omitted" for issue in result.issues)
