@@ -6,6 +6,7 @@ from typing import Literal
 
 HeightMode = Literal["auto", "manual"]
 ScoopMode = Literal["auto", "off"]
+GenerationSeverity = Literal["error", "warning"]
 
 
 def _finite_nonnegative(value: float, name: str) -> float:
@@ -87,6 +88,24 @@ class GenerationState:
                 self.last_generated_height_mm, "last_generated_height_mm"
             )
         self.review_required = bool(self.review_required)
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationIssue:
+    code: str
+    message: str
+    severity: GenerationSeverity
+    tool_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.severity not in {"error", "warning"}:
+            raise ValueError("severity must be 'error' or 'warning'")
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationValidationResult:
+    valid: bool
+    issues: tuple[GenerationIssue, ...]
 
 
 def generation_settings_defaults_dict() -> dict[str, object]:
