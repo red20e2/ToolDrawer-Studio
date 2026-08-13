@@ -186,12 +186,13 @@ class GeneratePanel(QWidget):
         mode = self._project.generation_settings.tool_scoop_modes.get(
             str(tool_id), "auto"
         )
+        was_updating = self._updating
         self._updating = True
         try:
             index = self.tool_scoop_mode.findData(mode)
             self.tool_scoop_mode.setCurrentIndex(max(0, index))
         finally:
-            self._updating = False
+            self._updating = was_updating
 
     def _emit_tool_scoop_mode(self, _index: int | None = None) -> None:
         if self._updating:
