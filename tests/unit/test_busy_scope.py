@@ -18,6 +18,14 @@ def _busy_api():
     return busy_ui
 
 
+def _enable_release_action_tabs(window) -> None:
+    # A brand-new empty project intentionally disables Generate and Save/Export.
+    # Enable those parent tabs so this test measures busy-state restoration rather
+    # than Qt's inherited disabled state from the workflow gate.
+    window.tabs.setTabEnabled(4, True)
+    window.tabs.setTabEnabled(5, True)
+
+
 def test_busy_scope_disables_conflicting_actions_and_uses_indeterminate_progress(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     app = QApplication.instance() or QApplication([])
@@ -30,8 +38,11 @@ def test_busy_scope_disables_conflicting_actions_and_uses_indeterminate_progress
         except AttributeError:
             pytest.fail("release operation progress indicator is not implemented")
         busy_ui = _busy_api()
+        _enable_release_action_tabs(window)
         window.generate_panel.generate_button.setEnabled(True)
         window.export_step_button.setEnabled(True)
+        assert window.generate_panel.generate_button.isEnabled() is True
+        assert window.export_step_button.isEnabled() is True
         with busy_ui(window, "Generating organizer"):
             assert window.generate_panel.generate_button.isEnabled() is False
             assert window.export_step_button.isEnabled() is False
@@ -54,7 +65,9 @@ def test_busy_scope_restores_controls_after_exception(monkeypatch, tmp_path):
     window.show()
     QApplication.processEvents()
     busy_ui = _busy_api()
+    _enable_release_action_tabs(window)
     window.generate_panel.generate_button.setEnabled(True)
+    assert window.generate_panel.generate_button.isEnabled() is True
     try:
         with pytest.raises(RuntimeError):
             with busy_ui(window, "Exporting organizer"):
