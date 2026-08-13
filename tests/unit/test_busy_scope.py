@@ -22,6 +22,8 @@ def test_busy_scope_disables_conflicting_actions_and_uses_indeterminate_progress
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     app = QApplication.instance() or QApplication([])
     window = build_main_window()
+    window.show()
+    QApplication.processEvents()
     try:
         try:
             progress = window.operation_progress
@@ -49,6 +51,8 @@ def test_busy_scope_restores_controls_after_exception(monkeypatch, tmp_path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     app = QApplication.instance() or QApplication([])
     window = build_main_window()
+    window.show()
+    QApplication.processEvents()
     busy_ui = _busy_api()
     window.generate_panel.generate_button.setEnabled(True)
     try:
