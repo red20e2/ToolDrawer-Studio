@@ -365,6 +365,35 @@ def validate_generation(
                             tool_id,
                         )
                     )
+                if (
+                    scoop is not None
+                    and layout.mode == "gridfinity"
+                    and settings.stacking_lip_enabled
+                ):
+                    scoop_bounds = scoop.cutter.val().BoundingBox()
+                    scoop_xy = box(
+                        scoop_bounds.xmin,
+                        scoop_bounds.ymin,
+                        scoop_bounds.xmax,
+                        scoop_bounds.ymax,
+                    )
+                    if (
+                        scoop_xy.intersection(stacking_lip_xy_zone(layout)).area
+                        > _INTERSECTION_AREA_TOLERANCE
+                    ):
+                        already_reported = any(
+                            issue.code == "stacking_lip_omitted"
+                            and issue.tool_ids == (tool_id,)
+                            for issue in issues
+                        )
+                        if not already_reported:
+                            issues.append(
+                                _warning(
+                                    "stacking_lip_omitted",
+                                    f"{tool.name} scoop overlaps the stacking-lip region; the conflicting lip segment will be omitted",
+                                    tool_id,
+                                )
+                            )
 
     ordered = tuple(sorted(issues, key=_sort_key))
     return GenerationValidationResult(
