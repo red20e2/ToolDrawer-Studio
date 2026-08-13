@@ -30,7 +30,7 @@ def _add_tool(window: MainWindow, tool_id: str = "tool-1") -> ToolObject:
     return tool
 
 
-def test_main_window_has_arrange_stage_between_measure_and_pocket_settings():
+def test_main_window_has_arrange_stage_between_measure_and_generate():
     app = _app()
     window = MainWindow()
 
@@ -40,7 +40,7 @@ def test_main_window_has_arrange_stage_between_measure_and_pocket_settings():
         "2. Detect & Edit",
         "3. Measure",
         "4. Arrange",
-        "5. Pocket Settings",
+        "5. Generate",
         "6. Save & Export",
     ]
     assert isinstance(window.arrange_panel, ArrangePanel)

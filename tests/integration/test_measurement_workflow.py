@@ -113,7 +113,7 @@ def test_measure_state_round_trip_reopens_without_reanalysis(tmp_path: Path):
     )
     saved = reopened.project.tools[0]
 
-    assert reopened.project.schema_version == 3
+    assert reopened.project.schema_version == 4
     assert saved.side_view_capture_id == side_capture
     assert saved.automatic_thickness_mm == pytest.approx(20.0)
     assert saved.automatic_thickness_confidence == pytest.approx(0.91)
@@ -232,14 +232,14 @@ def test_v1_migrate_save_reopen_preserves_legacy_depth_exactly(tmp_path: Path):
     migrated.select_tool(tool.id)
     assert migrated.resolved_pocket_depth(tool.id) == pytest.approx(7.625)
 
-    v3_path = tmp_path / "migrated-v3.tds"
-    migrated.save(v3_path)
-    with ZipFile(v3_path, "r") as archive:
+    v4_path = tmp_path / "migrated-v4.tds"
+    migrated.save(v4_path)
+    with ZipFile(v4_path, "r") as archive:
         manifest = json.loads(archive.read("manifest.json"))
-    assert manifest["schema_version"] == 3
+    assert manifest["schema_version"] == 4
 
-    reopened = WorkflowController.open(v3_path)
+    reopened = WorkflowController.open(v4_path)
     reopened.select_tool(tool.id)
-    assert reopened.project.schema_version == 3
+    assert reopened.project.schema_version == 4
     assert reopened.project.tools[0].pocket_depth_override_mm == pytest.approx(7.625)
     assert reopened.resolved_pocket_depth(tool.id) == pytest.approx(7.625)

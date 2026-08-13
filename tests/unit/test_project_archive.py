@@ -5,6 +5,7 @@ from zipfile import ZIP_DEFLATED, ZipFile
 import pytest
 
 from tooldrawer_studio.domain.models import CaptureAsset, Point2D, Project, ToolObject
+from tooldrawer_studio.generation.models import GenerationSettings, GenerationState
 from tooldrawer_studio.measurement.models import ImagePoint
 from tooldrawer_studio.persistence.project_archive import ProjectBundle, load_project, save_project
 
@@ -45,14 +46,14 @@ def _write_v1_archive(path: Path, depth_mm: float) -> None:
         archive.writestr("project.json", json.dumps(payload))
 
 
-def test_tds_v1_migrates_depth_exactly_to_v3_override(tmp_path: Path):
+def test_tds_v1_migrates_depth_exactly_to_v4_override(tmp_path: Path):
     path = tmp_path / "legacy.tds"
     _write_v1_archive(path, 9.375)
 
     reopened = load_project(path)
     tool = reopened.project.tools[0]
 
-    assert reopened.project.schema_version == 3
+    assert reopened.project.schema_version == 4
     assert reopened.project.default_exposed_height_mm == 4.0
     assert reopened.project.default_bottom_clearance_mm == 0.8
     assert reopened.project.default_layout_spacing_mm == 3.0
@@ -61,6 +62,9 @@ def test_tds_v1_migrates_depth_exactly_to_v3_override(tmp_path: Path):
     assert reopened.project.default_snap_increment_mm == 1.0
     assert reopened.project.gridfinity_pitch_mm == 42.0
     assert reopened.project.layout is None
+    assert reopened.project.generation_settings.minimum_floor_mm == 2.0
+    assert reopened.project.generation_state.last_generated_fingerprint is None
+    assert reopened.project.generation_state.review_required is True
     assert tool.pocket_depth_override_mm == pytest.approx(9.375)
     assert tool.side_view_capture_id is None
     assert tool.accepted_thickness_mm is None
@@ -90,14 +94,14 @@ def test_tds_round_trip_preserves_base_and_edited_contours(tmp_path: Path):
     save_project(bundle, path)
     reopened = load_project(path)
 
-    assert reopened.project.schema_version == 3
+    assert reopened.project.schema_version == 4
     assert reopened.project.tools[0].base_contour_mm[1] == Point2D(20, 0)
     assert reopened.project.tools[0].contour_mm[1] == Point2D(22, 0)
     assert reopened.project.tools[0].pocket_depth_override_mm == pytest.approx(9.0)
     assert reopened.image_bytes["capture-1"] == b"fake-png-bytes"
 
 
-def test_tds_v3_round_trip_preserves_measurement_state(tmp_path: Path):
+def test_tds_v4_round_trip_preserves_measurement_state(tmp_path: Path):
     top = CaptureAsset("capture-1", "top.png", 100, 80, "images/capture-1.png")
     side = CaptureAsset("capture-2", "side.png", 120, 90, "images/capture-2.png")
     contour = [Point2D(0, 0), Point2D(20, 0), Point2D(20, 10), Point2D(0, 10)]
@@ -167,6 +171,40 @@ def test_tds_v3_round_trip_preserves_measurement_state(tmp_path: Path):
     assert reopened.image_bytes == bundle.image_bytes
 
 
+def test_tds_v4_round_trip_preserves_generation_settings(tmp_path: Path):
+    project = Project(
+        id="project-1",
+        name="Generated",
+        generation_settings=GenerationSettings(
+            height_mode="manual",
+            manual_height_mm=28.0,
+            minimum_floor_mm=2.5,
+            minimum_wall_mm=3.0,
+            scoops_enabled=False,
+            tool_scoop_modes={"tool-1": "off"},
+            magnets_enabled=False,
+            magnet_diameter_mm=6.2,
+            magnet_depth_mm=2.2,
+            screw_holes_enabled=True,
+            screw_diameter_mm=3.4,
+            stacking_lip_enabled=False,
+            gridfinity_height_snap=False,
+        ),
+        generation_state=GenerationState(
+            last_generated_fingerprint="abc123",
+            last_generated_height_mm=28.0,
+            review_required=False,
+        ),
+    )
+    path = tmp_path / "generated.tds"
+    save_project(ProjectBundle(project=project, image_bytes={}), path)
+
+    reopened = load_project(path).project
+
+    assert reopened.generation_settings == project.generation_settings
+    assert reopened.generation_state == project.generation_state
+
+
 def test_tds_rejects_unsafe_archive_member(tmp_path: Path):
     path = tmp_path / "unsafe.tds"
     with ZipFile(path, "w", ZIP_DEFLATED) as archive:
@@ -198,9 +236,9 @@ def test_tds_rejects_future_schema(tmp_path: Path):
     with ZipFile(path, "w", ZIP_DEFLATED) as archive:
         archive.writestr(
             "manifest.json",
-            json.dumps({"format": "tooldrawer-studio", "schema_version": 4}),
+            json.dumps({"format": "tooldrawer-studio", "schema_version": 5}),
         )
         archive.writestr("project.json", "{}")
 
-    with pytest.raises(ValueError, match="Unsupported project schema version: 4"):
+    with pytest.raises(ValueError, match="Unsupported project schema version: 5"):
         load_project(path)

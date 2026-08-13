@@ -25,7 +25,24 @@ from tooldrawer_studio.capture.image_loader import (
     normalized_png_bytes,
 )
 from tooldrawer_studio.domain.models import CalibrationRecord, Point2D, Project, ToolObject
-from tooldrawer_studio.export.service import ExportPaths, export_tool_package
+from tooldrawer_studio.export.service import (
+    ExportPaths,
+    OrganizerExportPaths,
+    export_organizer_package,
+    export_tool_package,
+)
+from tooldrawer_studio.generation.builder import (
+    GenerationResult,
+    generate_organizer as build_organizer,
+)
+from tooldrawer_studio.generation.fingerprint import generation_fingerprint
+from tooldrawer_studio.generation.models import (
+    GenerationSettings,
+    GenerationValidationResult,
+)
+from tooldrawer_studio.generation.validation import (
+    validate_generation as validate_generation_state,
+)
 from tooldrawer_studio.geometry.contour import replace_tool_contour, reset_tool_contour
 from tooldrawer_studio.geometry.pocket import PocketSpec, build_pocket_insert
 from tooldrawer_studio.layout.geometry import oriented_cavity_polygon
@@ -83,6 +100,7 @@ class WorkflowController:
         self._active_calibration: CalibrationRecord | None = None
         self._selected_tool_id: str | None = None
         self._pocket_spec: PocketSpec | None = None
+        self._generation_result: GenerationResult | None = None
         self._measurement_service = measurement_service or ThicknessMeasurementService()
 
     @property
@@ -96,6 +114,14 @@ class WorkflowController:
     @property
     def active_capture_id(self) -> str | None:
         return self._active_capture_id
+
+    @property
+    def generated_result(self) -> GenerationResult | None:
+        return self._generation_result
+
+    def _mark_generation_stale(self) -> None:
+        self._generation_result = None
+        self.project.generation_state.review_required = True
 
     def active_image_display_bytes(self) -> bytes:
         return normalized_png_bytes(self._require_active_image())
@@ -169,6 +195,7 @@ class WorkflowController:
         ):
             tool.thickness_review_required = True
         self._pocket_spec = None
+        self._mark_generation_stale()
 
     def _store_active_calibration(self, record: CalibrationRecord) -> CalibrationRecord:
         capture_id = self._require_active_capture_id()
@@ -280,6 +307,7 @@ class WorkflowController:
     def _mark_layout_review_required(self) -> None:
         if self.project.layout is not None:
             self.project.layout.review_required = True
+        self._mark_generation_stale()
 
     def _reconcile_layout_tools(self) -> None:
         layout = self.project.layout
@@ -297,6 +325,7 @@ class WorkflowController:
             placement.tool_id for placement in reconciled if not placement.is_placed
         ]
         layout.review_required = True
+        self._mark_generation_stale()
 
     def _require_layout(self) -> LayoutState:
         if self.project.layout is None:
@@ -343,6 +372,7 @@ class WorkflowController:
             ],
             review_required=prior_had_placed,
         )
+        self._mark_generation_stale()
         return self.project.layout
 
     def configure_gridfinity_layout(
@@ -375,6 +405,7 @@ class WorkflowController:
             ],
             review_required=prior_had_placed,
         )
+        self._mark_generation_stale()
         return self.project.layout
 
     def set_layout_defaults(
@@ -411,7 +442,7 @@ class WorkflowController:
             if layout is not None:
                 layout.snap_increment_mm = value
         if layout is not None and geometry_changed:
-            layout.review_required = True
+            self._mark_layout_review_required()
         return layout
 
     def set_layout_snap(self, enabled: bool) -> LayoutState:
@@ -467,6 +498,7 @@ class WorkflowController:
             value for value in layout.unplaced_tool_ids if value != tool_id
         ]
         layout.review_required = True
+        self._mark_generation_stale()
         return placement
 
     def rotate_tool(self, tool_id: str, rotation_deg: float) -> ToolPlacement:
@@ -485,6 +517,7 @@ class WorkflowController:
             value for value in layout.unplaced_tool_ids if value != tool_id
         ]
         layout.review_required = True
+        self._mark_generation_stale()
         return placement
 
     def set_tool_locked(self, tool_id: str, locked: bool) -> ToolPlacement:
@@ -501,6 +534,7 @@ class WorkflowController:
         layout.placements = [replace(placement) for placement in result.placements]
         layout.unplaced_tool_ids = list(result.unplaced_tool_ids)
         layout.review_required = not result.validation.valid
+        self._mark_generation_stale()
         return result
 
     def auto_arrange(self) -> PackingResult:
@@ -624,6 +658,7 @@ class WorkflowController:
                 self._invalidate_image_derived_thickness(tool)
             tool.side_view_capture_id = capture_id
             self._pocket_spec = None
+        self._mark_generation_stale()
         return tool
 
     def _side_view_context(
@@ -672,6 +707,7 @@ class WorkflowController:
             tool.thickness_accepted = False
 
         self._pocket_spec = None
+        self._mark_generation_stale()
         return result
 
     def _require_automatic_thickness(self, tool: ToolObject) -> float:
@@ -688,6 +724,7 @@ class WorkflowController:
         tool.thickness_accepted = True
         tool.thickness_review_required = False
         self._pocket_spec = None
+        self._mark_generation_stale()
         return tool
 
     def _validate_image_endpoint(self, image: LoadedImage, point: ImagePoint) -> None:
@@ -719,6 +756,7 @@ class WorkflowController:
         tool.thickness_accepted = True
         tool.thickness_review_required = False
         self._pocket_spec = None
+        self._mark_generation_stale()
         return tool
 
     def set_manual_thickness(self, tool_id: str, thickness_mm: float) -> ToolObject:
@@ -730,6 +768,7 @@ class WorkflowController:
         tool.thickness_accepted = True
         tool.thickness_review_required = False
         self._pocket_spec = None
+        self._mark_generation_stale()
         return tool
 
     def reset_to_automatic_thickness(self, tool_id: str) -> ToolObject:
@@ -741,6 +780,7 @@ class WorkflowController:
         tool.thickness_accepted = True
         tool.thickness_review_required = False
         self._pocket_spec = None
+        self._mark_generation_stale()
         return tool
 
     def set_project_measure_defaults(
@@ -758,6 +798,7 @@ class WorkflowController:
                 bottom_clearance_mm, "Bottom clearance"
             )
         self._pocket_spec = None
+        self._mark_generation_stale()
         return self.project
 
     def set_exposed_height_override(
@@ -770,6 +811,7 @@ class WorkflowController:
             else _validate_nonnegative(value_mm, "Exposed height override")
         )
         self._pocket_spec = None
+        self._mark_generation_stale()
         return tool
 
     def set_bottom_clearance_override(
@@ -782,6 +824,7 @@ class WorkflowController:
             else _validate_nonnegative(value_mm, "Bottom clearance override")
         )
         self._pocket_spec = None
+        self._mark_generation_stale()
         return tool
 
     def set_pocket_depth_override(
@@ -794,6 +837,7 @@ class WorkflowController:
             else _validate_positive(value_mm, "Pocket depth override")
         )
         self._pocket_spec = None
+        self._mark_generation_stale()
         return tool
 
     def suggested_pocket_depth(self, tool_id: str) -> float | None:
@@ -803,6 +847,85 @@ class WorkflowController:
     def resolved_pocket_depth(self, tool_id: str) -> float | None:
         tool = self.project.tools[self._tool_index(tool_id)]
         return final_pocket_depth_mm(self.project, tool)
+
+    def set_generation_settings(self, **changes: object) -> GenerationSettings:
+        allowed = set(GenerationSettings.__dataclass_fields__)
+        unknown = set(changes).difference(allowed)
+        if unknown:
+            raise ValueError(
+                f"Unknown generation setting(s): {', '.join(sorted(unknown))}"
+            )
+        updated = replace(self.project.generation_settings, **changes)
+        if updated != self.project.generation_settings:
+            self.project.generation_settings = updated
+            self._mark_generation_stale()
+        return self.project.generation_settings
+
+    def set_tool_scoop_mode(self, tool_id: str, mode: str) -> GenerationSettings:
+        self._tool_index(tool_id)
+        if mode not in {"auto", "off"}:
+            raise ValueError("Scoop mode must be 'auto' or 'off'")
+        modes = dict(self.project.generation_settings.tool_scoop_modes)
+        if mode == "auto":
+            modes.pop(tool_id, None)
+        else:
+            modes[tool_id] = "off"
+        return self.set_generation_settings(tool_scoop_modes=modes)
+
+    def generation_validation(self) -> GenerationValidationResult:
+        height = (
+            None
+            if self._generation_result is None
+            else self._generation_result.body_height_mm
+        )
+        return validate_generation_state(self.project, height)
+
+    def generate_organizer(self) -> GenerationResult:
+        result = build_organizer(self.project)
+        self._generation_result = result
+        state = self.project.generation_state
+        state.last_generated_fingerprint = result.fingerprint
+        state.last_generated_height_mm = result.body_height_mm
+        state.review_required = False
+        return result
+
+    def generation_is_current(self) -> bool:
+        result = self._generation_result
+        state = self.project.generation_state
+        if result is None:
+            return False
+        try:
+            current_fingerprint = generation_fingerprint(self.project)
+        except (ValueError, TypeError):
+            self._mark_generation_stale()
+            return False
+        current = (
+            not state.review_required
+            and result.fingerprint == current_fingerprint
+            and state.last_generated_fingerprint == current_fingerprint
+        )
+        if not current:
+            self._mark_generation_stale()
+        return current
+
+    def export_organizer(
+        self,
+        directory: Path,
+        formats: set[str] | frozenset[str] | None = None,
+    ) -> OrganizerExportPaths:
+        if not self.generation_is_current() or self._generation_result is None:
+            raise ValueError("Generate the current organizer before exporting")
+        requested = (
+            frozenset({"step", "stl", "dxf"})
+            if formats is None
+            else frozenset(formats)
+        )
+        return export_organizer_package(
+            self._generation_result,
+            self.project,
+            directory,
+            requested,
+        )
 
     def save(self, path: Path) -> None:
         save_project(self.bundle, path)
@@ -828,6 +951,8 @@ class WorkflowController:
             )
         if controller.project.tools:
             controller._selected_tool_id = controller.project.tools[0].id
+        controller._generation_result = None
+        controller.project.generation_state.review_required = True
         return controller
 
     def select_tool(self, tool_id: str) -> None:
