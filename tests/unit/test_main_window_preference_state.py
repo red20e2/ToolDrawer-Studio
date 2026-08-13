@@ -7,11 +7,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
+from tooldrawer_studio.__main__ import build_main_window
 from tooldrawer_studio.preferences import Preferences
-from tooldrawer_studio.ui.main_window import MainWindow
 
 
-def test_main_window_loads_persisted_dialog_directories(monkeypatch, tmp_path: Path):
+def test_launched_window_loads_persisted_dialog_directories(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     project_dir = (tmp_path / "projects").resolve()
     export_dir = (tmp_path / "exports").resolve()
@@ -25,7 +25,7 @@ def test_main_window_loads_persisted_dialog_directories(monkeypatch, tmp_path: P
     ).save()
 
     app = QApplication.instance() or QApplication([])
-    window = MainWindow()
+    window = build_main_window()
     try:
         assert window.preferences.project_directory == str(project_dir)
         assert window.preferences.export_directory == str(export_dir)
