@@ -26,5 +26,7 @@ jobs:
           python -m compileall -q src tests
           python -c "from tooldrawer_studio.ui.main_window import MainWindow; from tooldrawer_studio.measurement.service import ThicknessMeasurementService; print('imports-ok')"
           python -c "import shapely; from tooldrawer_studio.layout.packer import pack_layout; from tooldrawer_studio.ui.arrange_panel import ArrangePanel; print('arrange-imports-ok')"
+          python -c "from tooldrawer_studio.generation.builder import generate_organizer; from tooldrawer_studio.generation.gridfinity import PROFILE; from tooldrawer_studio.ui.generate_panel import GeneratePanel; from tooldrawer_studio.ui.model_preview import ModelPreview; print('generation-imports-ok')"
+          python -c "from tooldrawer_studio.generation.foam import build_foam_body; from tooldrawer_studio.layout.models import LayoutState; model=build_foam_body(LayoutState(mode='foam', foam_width_mm=60.0, foam_height_mm=40.0), 10.0); assert model.val().isValid(); print('generation-build-ok')"
       - name: Run tests
         run: python -m pytest -q
