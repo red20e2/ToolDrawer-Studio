@@ -27,7 +27,10 @@ def test_pyinstaller_spec_builds_windowed_onedir_app():
 def test_release_build_scripts_exist():
     build_script = _root() / "packaging" / "build_app.ps1"
     verify_script = _root() / "packaging" / "verify_frozen.ps1"
+    verify_cmd = _root() / "packaging" / "verify_frozen.cmd"
     assert build_script.is_file()
     assert verify_script.is_file()
+    assert verify_cmd.is_file()
     assert "ToolDrawerStudio.spec" in build_script.read_text(encoding="utf-8")
-    assert "ToolDrawer Studio.exe" in verify_script.read_text(encoding="utf-8")
+    assert "verify_frozen.cmd" in verify_script.read_text(encoding="utf-8")
+    assert "ToolDrawer Studio.exe" in verify_cmd.read_text(encoding="utf-8")
