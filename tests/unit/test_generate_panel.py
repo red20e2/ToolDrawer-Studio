@@ -75,6 +75,17 @@ def test_gridfinity_controls_only_show_for_gridfinity_project():
     panel.close()
 
 
+def test_set_project_does_not_emit_settings_changed_during_nested_widget_refresh():
+    panel = GeneratePanel()
+    captured: list[dict[str, object]] = []
+    panel.settingsChanged.connect(lambda payload: captured.append(payload))
+
+    panel.set_project(_project())
+
+    assert captured == []
+    panel.close()
+
+
 def test_settings_emit_presentation_neutral_dict():
     panel = GeneratePanel()
     panel.set_project(_project())
