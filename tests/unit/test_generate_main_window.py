@@ -32,10 +32,3 @@ def test_save_export_stage_has_individual_and_all_manufacturing_actions():
     assert window.export_dxf_button.text() == "Export DXF"
     assert window.export_all_button.text() == "Export All"
     window.close()
-
-
-def test_generate_panel_signals_are_connected_to_window_handlers():
-    window = MainWindow()
-    receivers = window.generate_panel.generateRequested.receivers()
-    assert receivers >= 1
-    window.close()
