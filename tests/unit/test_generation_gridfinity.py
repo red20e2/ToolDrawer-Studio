@@ -4,6 +4,8 @@ from tooldrawer_studio.generation.gridfinity import (
     PROFILE,
     build_gridfinity_body,
     gridfinity_cell_centers,
+    gridfinity_feature_cutters,
+    magnet_centers,
     snap_gridfinity_height,
 )
 from tooldrawer_studio.generation.models import GenerationSettings
@@ -95,3 +97,40 @@ def test_gridfinity_body_rejects_wrong_pitch():
 def test_gridfinity_body_requires_at_least_one_base_unit_height():
     with pytest.raises(ValueError, match="at least 7.000 mm"):
         build_gridfinity_body(_layout(1, 1), 6.9, GenerationSettings())
+
+
+def test_default_magnet_holes_are_6_by_2_mm():
+    features = gridfinity_feature_cutters(_layout(1, 1), GenerationSettings(), 21.0)
+    first = features.magnet_cutters[0].val().BoundingBox()
+    assert first.xlen == pytest.approx(6.0, abs=1e-3)
+    assert first.ylen == pytest.approx(6.0, abs=1e-3)
+    assert first.zlen == pytest.approx(2.0, abs=1e-3)
+
+
+def test_shared_multi_cell_hole_coordinates_are_deduplicated():
+    centers = magnet_centers(_layout(3, 2))
+    assert len(centers) == len(set(centers))
+    assert len(centers) == 24
+
+
+def test_screw_holes_are_independent_of_magnets():
+    settings = GenerationSettings(magnets_enabled=False, screw_holes_enabled=True)
+    features = gridfinity_feature_cutters(_layout(1, 1), settings, 21.0)
+    assert not features.magnet_cutters
+    assert features.screw_cutters
+    screw = features.screw_cutters[0].val().BoundingBox()
+    assert screw.xlen == pytest.approx(3.2, abs=1e-3)
+
+
+def test_stacking_lip_is_present_by_default():
+    features = gridfinity_feature_cutters(_layout(2, 1), GenerationSettings(), 21.0)
+    assert features.stacking_lip is not None
+    box = features.stacking_lip.val().BoundingBox()
+    assert box.zmin == pytest.approx(21.0, abs=1e-3)
+    assert box.zmax == pytest.approx(25.4, abs=1e-3)
+
+
+def test_disabled_stacking_lip_returns_none():
+    settings = GenerationSettings(stacking_lip_enabled=False)
+    features = gridfinity_feature_cutters(_layout(1, 1), settings, 21.0)
+    assert features.stacking_lip is None
