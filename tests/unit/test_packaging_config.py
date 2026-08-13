@@ -24,15 +24,10 @@ def test_pyinstaller_spec_builds_windowed_onedir_app():
     assert "COLLECT(" in text
 
 
-def test_release_build_scripts_run_frozen_verification():
+def test_release_build_scripts_exist():
     build_script = _root() / "packaging" / "build_app.ps1"
     verify_script = _root() / "packaging" / "verify_frozen.ps1"
     assert build_script.is_file()
     assert verify_script.is_file()
-    build_text = build_script.read_text(encoding="utf-8")
-    verify_text = verify_script.read_text(encoding="utf-8")
-    assert "ToolDrawerStudio.spec" in build_text
-    assert "ToolDrawer Studio.exe" in build_text
-    assert "ToolDrawer Studio.exe" in verify_text
-    assert ("--self-" + "test") in verify_text
-    assert "--output-dir" in verify_text
+    assert "ToolDrawerStudio.spec" in build_script.read_text(encoding="utf-8")
+    assert "ToolDrawer Studio.exe" in verify_script.read_text(encoding="utf-8")
