@@ -36,7 +36,9 @@ from tooldrawer_studio.ui.arrangement_view import ArrangementView
 from tooldrawer_studio.ui.calibration_view import CalibrationImageView
 from tooldrawer_studio.ui.capture_tray import CaptureTrayWidget, qr_image
 from tooldrawer_studio.ui.contour_editor import ContourEditor
+from tooldrawer_studio.ui.generate_panel import GeneratePanel
 from tooldrawer_studio.ui.measure_panel import MeasurePanel
+from tooldrawer_studio.ui.model_preview import ModelPreview
 from tooldrawer_studio.ui.webcam_panel import WebcamPanel
 from tooldrawer_studio.ui.workflow_controller import (
     MIN_AUTOMATIC_TRACE_CALIBRATION_CONFIDENCE,
@@ -72,7 +74,10 @@ class MainWindow(QMainWindow):
         self.arrangement_view = ArrangementView()
         self._connect_arrange()
         self.tabs.addTab(self._arrange_stage(), "4. Arrange")
-        self.tabs.addTab(self._pocket_stage(), "5. Pocket Settings")
+        self.generate_panel = GeneratePanel()
+        self.model_preview = ModelPreview()
+        self._connect_generate()
+        self.tabs.addTab(self._generate_stage(), "5. Generate")
         self.tabs.addTab(self._export_stage(), "6. Save & Export")
         for index in (1, 2, 3, 4, 5):
             self.tabs.setTabEnabled(index, False)
@@ -291,37 +296,48 @@ class MainWindow(QMainWindow):
         layout.addLayout(right, 3)
         return page
 
-    def _pocket_stage(self) -> QWidget:
+    def _generate_stage(self) -> QWidget:
         page = QWidget()
-        layout = QVBoxLayout(page)
-        form = QFormLayout()
-        self.base_width = self._number(1, 2000, 300)
-        self.base_height = self._number(1, 2000, 200)
-        self.base_thickness = self._number(0.1, 200, 10)
-        self.pocket_depth_label = QLabel("No resolved pocket depth")
-        form.addRow("Base width", self.base_width)
-        form.addRow("Base height", self.base_height)
-        form.addRow("Base thickness", self.base_thickness)
-        form.addRow("Pocket depth", self.pocket_depth_label)
-        layout.addLayout(form)
-        button = QPushButton("Apply Pocket Settings")
-        button.clicked.connect(self._configure_pocket)
-        layout.addWidget(button)
-        self.pocket_status = QLabel("Pocket settings not applied")
-        layout.addWidget(self.pocket_status)
-        layout.addStretch()
+        layout = QHBoxLayout(page)
+        layout.addWidget(self.generate_panel, 1)
+        preview_column = QVBoxLayout()
+        preview_title = QLabel("3D Manufacturing Preview")
+        preview_column.addWidget(preview_title)
+        preview_column.addWidget(self.model_preview, 1)
+        reset_view = QPushButton("Reset 3D View")
+        reset_view.clicked.connect(self.model_preview.reset_view)
+        preview_column.addWidget(reset_view)
+        layout.addLayout(preview_column, 3)
         return page
 
     def _export_stage(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
         save_button = QPushButton("Save Editable .tds Project")
-        export_button = QPushButton("Export STEP + STL + DXF")
         save_button.clicked.connect(self._save_project)
-        export_button.clicked.connect(self._export_files)
         layout.addWidget(save_button)
-        layout.addWidget(export_button)
-        self.export_status = QLabel("No export yet")
+
+        self.export_step_button = QPushButton("Export STEP")
+        self.export_stl_button = QPushButton("Export STL")
+        self.export_dxf_button = QPushButton("Export DXF")
+        self.export_all_button = QPushButton("Export All")
+        self.export_step_button.clicked.connect(
+            lambda: self._export_generated_files({"step"})
+        )
+        self.export_stl_button.clicked.connect(
+            lambda: self._export_generated_files({"stl"})
+        )
+        self.export_dxf_button.clicked.connect(
+            lambda: self._export_generated_files({"dxf"})
+        )
+        self.export_all_button.clicked.connect(
+            lambda: self._export_generated_files({"step", "stl", "dxf"})
+        )
+        layout.addWidget(self.export_step_button)
+        layout.addWidget(self.export_stl_button)
+        layout.addWidget(self.export_dxf_button)
+        layout.addWidget(self.export_all_button)
+        self.export_status = QLabel("No manufacturing export yet")
         self.export_status.setWordWrap(True)
         layout.addWidget(self.export_status)
         layout.addStretch()
@@ -371,6 +387,60 @@ class MainWindow(QMainWindow):
         self.arrangement_view.selectionChanged.connect(
             self._arrange_selection_changed
         )
+
+    def _connect_generate(self) -> None:
+        self.generate_panel.settingsChanged.connect(self._generate_settings_changed)
+        self.generate_panel.toolScoopModeChanged.connect(self._generate_tool_scoop_mode)
+        self.generate_panel.generateRequested.connect(self._generate_model)
+
+    def _refresh_generate_state(self) -> None:
+        project = self.controller.project
+        self.generate_panel.set_project(project)
+        layout = project.layout
+        self.tabs.setTabEnabled(4, layout is not None and bool(project.tools))
+        self.tabs.setTabEnabled(5, bool(project.tools))
+        if layout is None:
+            self.model_preview.clear_model()
+            self.generate_panel.set_currentness(False)
+            return
+        try:
+            validation = self.controller.generation_validation()
+        except Exception as exc:
+            self.generate_panel.validation_label.setText(f"Validation: {exc}")
+        else:
+            self.generate_panel.set_validation(validation)
+        current = self.controller.generation_is_current()
+        self.generate_panel.set_currentness(current)
+        result = self.controller.generated_result
+        if current and result is not None:
+            self.model_preview.set_model(result.model)
+        else:
+            self.model_preview.clear_model()
+
+    def _generate_settings_changed(self, changes: object) -> None:
+        try:
+            if not isinstance(changes, dict):
+                raise ValueError("Invalid Generate settings payload")
+            self.controller.set_generation_settings(**changes)
+            self._refresh_generate_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _generate_tool_scoop_mode(self, tool_id: str, mode: str) -> None:
+        try:
+            self.controller.set_tool_scoop_mode(tool_id, mode)
+            self._refresh_generate_state()
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _generate_model(self) -> None:
+        try:
+            result = self.controller.generate_organizer()
+            self.model_preview.set_model(result.model)
+            self._refresh_generate_state()
+        except Exception as exc:
+            self._refresh_generate_state()
+            self._show_error(exc)
 
     def _show_error(self, exc: Exception) -> None:
         QMessageBox.critical(self, "ToolDrawer Studio", str(exc))
@@ -467,6 +537,7 @@ class MainWindow(QMainWindow):
             self.tabs.setTabEnabled(index, False)
         self.arrangement_view.scene.clear()
         self.arrangement_view.undo_stack.clear()
+        self.model_preview.clear_model()
         self.tabs.setCurrentIndex(0)
 
     def _import_photo(self) -> None:
@@ -762,11 +833,6 @@ class MainWindow(QMainWindow):
             warnings=warnings,
         )
 
-        if final is None:
-            self.pocket_depth_label.setText("No resolved pocket depth")
-        else:
-            self.pocket_depth_label.setText(f"{final:.3f} mm (from Measure)")
-
         if tool.side_view_capture_id is not None:
             self.measure_panel.measurement_view.set_image_bytes(
                 self.controller.capture_display_bytes(tool.side_view_capture_id)
@@ -789,9 +855,6 @@ class MainWindow(QMainWindow):
             )
 
         self.tabs.setTabEnabled(3, bool(self.controller.project.tools))
-        self.tabs.setTabEnabled(4, final is not None)
-        if final is None:
-            self.tabs.setTabEnabled(5, False)
         self._refresh_arrange_state()
 
     def _refresh_arrange_state(self, *, sync_view: bool = True) -> None:
@@ -809,6 +872,7 @@ class MainWindow(QMainWindow):
                 total_count=len(project.tools),
                 validation_messages=(),
             )
+            self._refresh_generate_state()
             return
 
         validation = self.controller.validate_arrangement()
@@ -828,6 +892,7 @@ class MainWindow(QMainWindow):
             total_count=len(project.tools),
             validation_messages=[issue.message for issue in validation.issues],
         )
+        self._refresh_generate_state()
 
     def _arrange_selection_changed(self, selected: object) -> None:
         try:
@@ -1203,8 +1268,8 @@ class MainWindow(QMainWindow):
             has_tools = bool(self.controller.project.tools)
             self.tabs.setTabEnabled(2, has_tools)
             self.tabs.setTabEnabled(3, has_tools)
-            self.tabs.setTabEnabled(4, False)
-            self.tabs.setTabEnabled(5, False)
+            self.tabs.setTabEnabled(4, has_tools and self.controller.project.layout is not None)
+            self.tabs.setTabEnabled(5, has_tools)
             if has_tools:
                 self._refresh_measure_state()
             else:
@@ -1212,23 +1277,22 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._show_error(exc)
 
-    def _export_files(self) -> None:
+    def _export_generated_files(self, formats: set[str]) -> None:
         directory = QFileDialog.getExistingDirectory(
             self, "Export Manufacturing Files"
         )
         if not directory:
             return
         try:
-            self.controller.configure_pocket(
-                self.base_width.value(),
-                self.base_height.value(),
-                self.base_thickness.value(),
-                pocket_depth_mm=None,
-            )
-            paths = self.controller.export_selected_tool(Path(directory))
-            self.export_status.setText(
-                f"Exported:\n{paths.step}\n{paths.stl}\n{paths.dxf}"
-            )
+            paths = self.controller.export_organizer(Path(directory), formats)
+            exported = [
+                str(path)
+                for path in (paths.step, paths.stl, paths.dxf)
+                if path is not None
+            ]
+            self.export_status.setText("Exported:
+" + "
+".join(exported))
         except Exception as exc:
             self._show_error(exc)
 
