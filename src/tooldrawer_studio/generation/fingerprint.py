@@ -67,6 +67,7 @@ def generation_input_payload(project: Project) -> dict[str, object]:
             "grid_columns": layout.grid_columns,
             "grid_rows": layout.grid_rows,
             "grid_pitch_mm": layout.grid_pitch_mm,
+            "grab_clearance_mm": layout.grab_clearance_mm,
             "placements": [
                 {
                     "tool_id": placement.tool_id,
