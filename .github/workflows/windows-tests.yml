@@ -30,3 +30,9 @@ jobs:
           python -c "from tooldrawer_studio.generation.foam import build_foam_body; from tooldrawer_studio.layout.models import LayoutState; model=build_foam_body(LayoutState(mode='foam', foam_width_mm=60.0, foam_height_mm=40.0), 10.0); assert model.val().isValid(); print('generation-build-ok')"
       - name: Run tests
         run: python -m pytest -q
+      - name: Build frozen Windows app
+        shell: pwsh
+        run: ./packaging/build_app.ps1
+      - name: Verify frozen Windows app
+        shell: pwsh
+        run: ./packaging/verify_frozen.ps1
