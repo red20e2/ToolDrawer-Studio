@@ -230,9 +230,9 @@ class GeneratePanel(QWidget):
                 index = self.tool_selector.findData(previous)
                 if index >= 0:
                     self.tool_selector.setCurrentIndex(index)
+            self._height_mode_changed()
         finally:
             self._updating = False
-        self._height_mode_changed()
         is_grid = project.layout is not None and project.layout.mode == "gridfinity"
         self._set_gridfinity_visible(is_grid)
         self._tool_selection_changed()
