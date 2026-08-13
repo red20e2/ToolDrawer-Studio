@@ -164,11 +164,29 @@ def export_organizer_package(
     result: GenerationResult,
     project: Project,
     directory: Path,
+    formats: frozenset[str] = frozenset({"step", "stl", "dxf"}),
 ) -> OrganizerExportPaths:
+    unknown = formats.difference({"step", "stl", "dxf"})
+    if unknown:
+        raise ValueError(f"Unknown organizer export format(s): {', '.join(sorted(unknown))}")
+    if not formats:
+        raise ValueError("Select at least one organizer export format")
     directory.mkdir(parents=True, exist_ok=True)
     stem = _safe_name(project.name, project.id)
     return OrganizerExportPaths(
-        step=export_organizer_step(result.model, directory / f"{stem}.step"),
-        stl=export_organizer_stl(result.model, directory / f"{stem}.stl"),
-        dxf=export_organizer_dxf(project, directory / f"{stem}.dxf"),
+        step=(
+            export_organizer_step(result.model, directory / f"{stem}.step")
+            if "step" in formats
+            else None
+        ),
+        stl=(
+            export_organizer_stl(result.model, directory / f"{stem}.stl")
+            if "stl" in formats
+            else None
+        ),
+        dxf=(
+            export_organizer_dxf(project, directory / f"{stem}.dxf")
+            if "dxf" in formats
+            else None
+        ),
     )
