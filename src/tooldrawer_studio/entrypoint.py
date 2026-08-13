@@ -32,7 +32,13 @@ def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     verification_flag = "--self-" + "test"
     if verification_flag in args:
-        return run_release_check(_release_output(args))
+        output_dir = _release_output(args)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        status_path = output_dir / "release-check-status.txt"
+        status_path.unlink(missing_ok=True)
+        result = run_release_check(output_dir)
+        status_path.write_text(str(result), encoding="utf-8")
+        return result
 
     app = QApplication(sys.argv if argv is None else [sys.argv[0], *args])
     window = build_main_window()
