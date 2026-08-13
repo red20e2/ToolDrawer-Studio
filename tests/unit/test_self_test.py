@@ -3,17 +3,17 @@ from pathlib import Path
 import pytest
 
 
-def _self_test_module():
+def _release_check_module():
     try:
-        import tooldrawer_studio.self_test as self_test
+        import tooldrawer_studio.release_check as release_check
     except ModuleNotFoundError:
-        pytest.fail("release self-test module is not implemented")
-    return self_test
+        pytest.fail("release verification module is not implemented")
+    return release_check
 
 
 def test_release_self_test_generates_both_modes_and_all_exports(tmp_path):
-    self_test = _self_test_module()
-    assert self_test.run_self_test(tmp_path) == 0
+    release_check = _release_check_module()
+    assert release_check.run_release_check(tmp_path) == 0
     for mode in ("foam", "gridfinity"):
         directory = tmp_path / mode
         files = {path.suffix.lower(): path for path in directory.iterdir() if path.is_file()}
@@ -22,13 +22,13 @@ def test_release_self_test_generates_both_modes_and_all_exports(tmp_path):
 
 
 def test_release_self_test_returns_nonzero_with_useful_diagnostic(monkeypatch, tmp_path, capsys):
-    self_test = _self_test_module()
+    release_check = _release_check_module()
 
     def fail_probe() -> None:
         raise RuntimeError("dependency probe failed")
 
-    monkeypatch.setattr(self_test, "_probe_dependencies", fail_probe)
-    assert self_test.run_self_test(tmp_path) != 0
+    monkeypatch.setattr(release_check, "_probe_dependencies", fail_probe)
+    assert release_check.run_release_check(tmp_path) != 0
     captured = capsys.readouterr()
     assert "dependency probe failed" in captured.err
 
@@ -38,10 +38,10 @@ def test_main_accepts_noninteractive_self_test_cli(monkeypatch, tmp_path):
 
     calls: list[Path] = []
 
-    def fake_run_self_test(output_dir: Path) -> int:
+    def fake_run_release_check(output_dir: Path) -> int:
         calls.append(Path(output_dir))
         return 0
 
-    monkeypatch.setattr(app_main, "run_self_test", fake_run_self_test, raising=False)
+    monkeypatch.setattr(app_main, "run_release_check", fake_run_release_check, raising=False)
     assert app_main.main(["--self-test", "--output-dir", str(tmp_path)]) == 0
     assert calls == [tmp_path]
