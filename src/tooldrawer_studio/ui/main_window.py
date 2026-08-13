@@ -321,6 +321,13 @@ class MainWindow(QMainWindow):
         self.export_stl_button = QPushButton("Export STL")
         self.export_dxf_button = QPushButton("Export DXF")
         self.export_all_button = QPushButton("Export All")
+        for button in (
+            self.export_step_button,
+            self.export_stl_button,
+            self.export_dxf_button,
+            self.export_all_button,
+        ):
+            button.setEnabled(False)
         self.export_step_button.clicked.connect(
             lambda: self._export_generated_files({"step"})
         )
@@ -399,9 +406,17 @@ class MainWindow(QMainWindow):
         layout = project.layout
         self.tabs.setTabEnabled(4, layout is not None and bool(project.tools))
         self.tabs.setTabEnabled(5, bool(project.tools))
+        export_buttons = (
+            self.export_step_button,
+            self.export_stl_button,
+            self.export_dxf_button,
+            self.export_all_button,
+        )
         if layout is None:
             self.model_preview.clear_model()
             self.generate_panel.set_currentness(False)
+            for button in export_buttons:
+                button.setEnabled(False)
             return
         try:
             validation = self.controller.generation_validation()
@@ -411,6 +426,8 @@ class MainWindow(QMainWindow):
             self.generate_panel.set_validation(validation)
         current = self.controller.generation_is_current()
         self.generate_panel.set_currentness(current)
+        for button in export_buttons:
+            button.setEnabled(current)
         result = self.controller.generated_result
         if current and result is not None:
             self.model_preview.set_model(result.model)
