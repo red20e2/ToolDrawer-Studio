@@ -98,8 +98,8 @@ def test_scoop_direction_rotates_with_tool():
 
 
 def test_scoop_shrinks_before_violating_boundary():
-    project = _project(x_mm=84.0)
-    project.generation_settings.minimum_wall_mm = 0.5
+    project = _project(x_mm=78.0)
+    project.generation_settings.minimum_wall_mm = 3.0
     result = build_scoop_cutter(
         project.tools[0],
         project.layout.placements[0],
@@ -129,8 +129,8 @@ def test_scoop_never_breaks_minimum_floor():
 
 
 def test_impossible_scoop_returns_validation_error_not_silent_geometry_change():
-    project = _project(x_mm=94.0)
-    project.generation_settings.minimum_wall_mm = 2.0
+    project = _project(x_mm=78.0)
+    project.generation_settings.minimum_wall_mm = 10.0
     result = validate_generation(project, body_height_mm=12.0)
     assert any(
         issue.code == "scoop_invalid"
@@ -141,8 +141,8 @@ def test_impossible_scoop_returns_validation_error_not_silent_geometry_change():
 
 
 def test_shrunk_scoop_emits_nonblocking_warning():
-    project = _project(x_mm=84.0)
-    project.generation_settings.minimum_wall_mm = 0.5
+    project = _project(x_mm=78.0)
+    project.generation_settings.minimum_wall_mm = 3.0
     result = validate_generation(project, body_height_mm=12.0)
     assert result.valid
     assert any(issue.code == "scoop_shrunk" for issue in result.issues)
