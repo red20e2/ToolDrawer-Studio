@@ -19,7 +19,8 @@ def test_release_hashes_are_sorted_and_named(tmp_path):
     write_hashes([portable, setup], output)
     lines = output.read_text(encoding="utf-8").splitlines()
 
-    assert [line.split("  ", 1)[1] for line in lines] == [setup.name, portable.name]
+    expected_names = sorted([setup.name, portable.name])
+    assert [line.split("  ", 1)[1] for line in lines] == expected_names
     assert all(len(line.split("  ", 1)[0]) == 64 for line in lines)
 
 
