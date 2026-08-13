@@ -2,6 +2,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
+from tooldrawer_studio.diagnostics import initialize_diagnostics
 from tooldrawer_studio.ui.release_window import ReleaseMainWindow
 from tooldrawer_studio.version import APP_TITLE
 
@@ -13,6 +14,7 @@ def build_main_window() -> ReleaseMainWindow:
 
 
 def main() -> int:
+    initialize_diagnostics()
     app = QApplication(sys.argv)
     window = build_main_window()
     window.show()
