@@ -1,4 +1,4 @@
-name: Fix Generate MainWindow
+name: Fix Generate Hardening
 
 on:
   push:
@@ -17,7 +17,10 @@ jobs:
         with:
           ref: feature/v0.1-generate-manufacturing
           fetch-depth: 0
-      - run: python scripts/fix_generate_main_window.py
+      - shell: bash
+        run: |
+          python scripts/fix_generate_main_window.py
+          python scripts/patch_validation_scoop_lip.py
       - shell: bash
         run: |
           if git diff --quiet; then
@@ -25,6 +28,6 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/tooldrawer_studio/ui/main_window.py
-          git commit -m "fix: repair Generate export status string"
+          git add src/tooldrawer_studio/ui/main_window.py src/tooldrawer_studio/generation/validation.py
+          git commit -m "fix: close Generate hardening gaps"
           git push origin HEAD:feature/v0.1-generate-manufacturing
