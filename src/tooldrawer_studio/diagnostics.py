@@ -71,3 +71,9 @@ def install_exception_hook() -> None:
 
     setattr(sys, "excepthook", process_hook)
     setattr(threading, "excepthook", thread_hook)
+
+
+def initialize_diagnostics() -> Path:
+    path = configure_logging()
+    install_exception_hook()
+    return path
