@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtWidgets import QFileDialog, QMessageBox
+from PySide6.QtWidgets import QFileDialog, QMessageBox, QProgressBar
 
 from tooldrawer_studio.preferences import Preferences
 from tooldrawer_studio.project_state import ProjectEditTracker
+from tooldrawer_studio.ui.busy_scope import busy_ui
 from tooldrawer_studio.ui.main_window import MainWindow
 from tooldrawer_studio.ui.workflow_controller import WorkflowController
 
@@ -17,6 +18,11 @@ class ReleaseMainWindow(MainWindow):
         super().__init__()
         self.preferences = Preferences.load()
         self.project_edit_tracker = ProjectEditTracker(self.controller.project)
+        self.operation_progress = QProgressBar(self)
+        self.operation_progress.setVisible(False)
+        self.operation_progress.setTextVisible(True)
+        self.operation_progress.setMinimumWidth(220)
+        self.statusBar().addPermanentWidget(self.operation_progress)
 
     def _dialog_directory(self, kind: str) -> str:
         values = {
@@ -151,6 +157,11 @@ class ReleaseMainWindow(MainWindow):
         except Exception as exc:
             self._show_error(exc)
 
+    def _generate_model(self) -> None:
+        with busy_ui(self, "Generating organizer"):
+            super()._generate_model()
+        self._refresh_generate_state()
+
     def _export_generated_files(self, formats: set[str]) -> None:
         directory = QFileDialog.getExistingDirectory(
             self,
@@ -159,18 +170,19 @@ class ReleaseMainWindow(MainWindow):
         )
         if not directory:
             return
-        try:
-            path = Path(directory)
-            paths = self.controller.export_organizer(path, formats)
-            exported = [
-                str(exported_path)
-                for exported_path in (paths.step, paths.stl, paths.dxf)
-                if exported_path is not None
-            ]
-            self.export_status.setText("Exported:\n" + "\n".join(exported))
-            self._remember_export_directory(path)
-        except Exception as exc:
-            self._show_error(exc)
+        with busy_ui(self, "Exporting organizer"):
+            try:
+                path = Path(directory)
+                paths = self.controller.export_organizer(path, formats)
+                exported = [
+                    str(exported_path)
+                    for exported_path in (paths.step, paths.stl, paths.dxf)
+                    if exported_path is not None
+                ]
+                self.export_status.setText("Exported:\n" + "\n".join(exported))
+                self._remember_export_directory(path)
+            except Exception as exc:
+                self._show_error(exc)
 
     def closeEvent(self, event) -> None:  # type: ignore[no-untyped-def]
         if self.isVisible() and not self._confirm_discard_unsaved():
