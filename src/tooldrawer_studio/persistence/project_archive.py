@@ -12,6 +12,7 @@ from tooldrawer_studio.domain.models import (
     Project,
     ToolObject,
 )
+from tooldrawer_studio.generation.models import GenerationSettings, GenerationState
 from tooldrawer_studio.layout.models import LayoutState, ToolPlacement
 from tooldrawer_studio.measurement.models import ImagePoint
 from tooldrawer_studio.persistence.migrations import (
@@ -132,6 +133,64 @@ def _layout_from_dict(data: dict | None) -> LayoutState | None:
     )
 
 
+def _generation_settings_to_dict(settings: GenerationSettings) -> dict:
+    return {
+        "height_mode": settings.height_mode,
+        "manual_height_mm": settings.manual_height_mm,
+        "minimum_floor_mm": settings.minimum_floor_mm,
+        "minimum_wall_mm": settings.minimum_wall_mm,
+        "scoops_enabled": settings.scoops_enabled,
+        "tool_scoop_modes": dict(settings.tool_scoop_modes),
+        "magnets_enabled": settings.magnets_enabled,
+        "magnet_diameter_mm": settings.magnet_diameter_mm,
+        "magnet_depth_mm": settings.magnet_depth_mm,
+        "screw_holes_enabled": settings.screw_holes_enabled,
+        "screw_diameter_mm": settings.screw_diameter_mm,
+        "stacking_lip_enabled": settings.stacking_lip_enabled,
+        "gridfinity_height_snap": settings.gridfinity_height_snap,
+    }
+
+
+def _generation_settings_from_dict(data: dict | None) -> GenerationSettings:
+    payload = data or {}
+    return GenerationSettings(
+        height_mode=str(payload.get("height_mode", "auto")),
+        manual_height_mm=_optional_float(payload.get("manual_height_mm")),
+        minimum_floor_mm=float(payload.get("minimum_floor_mm", 2.0)),
+        minimum_wall_mm=float(payload.get("minimum_wall_mm", 2.0)),
+        scoops_enabled=bool(payload.get("scoops_enabled", True)),
+        tool_scoop_modes={
+            str(tool_id): str(mode)
+            for tool_id, mode in dict(payload.get("tool_scoop_modes", {})).items()
+        },
+        magnets_enabled=bool(payload.get("magnets_enabled", True)),
+        magnet_diameter_mm=float(payload.get("magnet_diameter_mm", 6.0)),
+        magnet_depth_mm=float(payload.get("magnet_depth_mm", 2.0)),
+        screw_holes_enabled=bool(payload.get("screw_holes_enabled", False)),
+        screw_diameter_mm=float(payload.get("screw_diameter_mm", 3.2)),
+        stacking_lip_enabled=bool(payload.get("stacking_lip_enabled", True)),
+        gridfinity_height_snap=bool(payload.get("gridfinity_height_snap", True)),
+    )
+
+
+def _generation_state_to_dict(state: GenerationState) -> dict:
+    return {
+        "last_generated_fingerprint": state.last_generated_fingerprint,
+        "last_generated_height_mm": state.last_generated_height_mm,
+        "review_required": state.review_required,
+    }
+
+
+def _generation_state_from_dict(data: dict | None) -> GenerationState:
+    payload = data or {}
+    fingerprint = payload.get("last_generated_fingerprint")
+    return GenerationState(
+        last_generated_fingerprint=(None if fingerprint is None else str(fingerprint)),
+        last_generated_height_mm=_optional_float(payload.get("last_generated_height_mm")),
+        review_required=bool(payload.get("review_required", True)),
+    )
+
+
 def _project_to_dict(project: Project) -> dict:
     return {
         "id": project.id,
@@ -145,6 +204,8 @@ def _project_to_dict(project: Project) -> dict:
         "default_snap_increment_mm": project.default_snap_increment_mm,
         "gridfinity_pitch_mm": project.gridfinity_pitch_mm,
         "layout": _layout_to_dict(project.layout),
+        "generation_settings": _generation_settings_to_dict(project.generation_settings),
+        "generation_state": _generation_state_to_dict(project.generation_state),
         "captures": [
             {
                 "id": capture.id,
@@ -237,7 +298,6 @@ def _project_from_dict(data: dict) -> Project:
 
     tools: list[ToolObject] = []
     for item in data.get("tools", []):
-        pocket_override = _optional_float(item.get("pocket_depth_override_mm"))
         tools.append(
             ToolObject(
                 id=str(item["id"]),
@@ -289,7 +349,9 @@ def _project_from_dict(data: dict) -> Project:
                 bottom_clearance_override_mm=_optional_float(
                     item.get("bottom_clearance_override_mm")
                 ),
-                pocket_depth_override_mm=pocket_override,
+                pocket_depth_override_mm=_optional_float(
+                    item.get("pocket_depth_override_mm")
+                ),
                 thickness_review_required=bool(
                     item.get("thickness_review_required", False)
                 ),
@@ -313,6 +375,10 @@ def _project_from_dict(data: dict) -> Project:
         default_snap_increment_mm=float(data.get("default_snap_increment_mm", 1.0)),
         gridfinity_pitch_mm=float(data.get("gridfinity_pitch_mm", 42.0)),
         layout=_layout_from_dict(data.get("layout")),
+        generation_settings=_generation_settings_from_dict(
+            data.get("generation_settings")
+        ),
+        generation_state=_generation_state_from_dict(data.get("generation_state")),
     )
 
 
