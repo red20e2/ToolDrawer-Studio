@@ -13,6 +13,7 @@ from tooldrawer_studio.layout.geometry import oriented_cavity_polygon
 from tooldrawer_studio.layout.models import LayoutState, ToolPlacement
 
 _SHRINK_FACTORS = (1.0, 0.85, 0.70, 0.55)
+_OUTWARD_RADIUS_FACTOR = 1.6
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,8 +108,8 @@ def _candidate_footprint(
     for tangent_offset, normal_offset in (
         (-width_mm / 2.0, -0.4 * depth_mm),
         (width_mm / 2.0, -0.4 * depth_mm),
-        (width_mm / 2.0, 1.6 * depth_mm),
-        (-width_mm / 2.0, 1.6 * depth_mm),
+        (width_mm / 2.0, _OUTWARD_RADIUS_FACTOR * depth_mm),
+        (-width_mm / 2.0, _OUTWARD_RADIUS_FACTOR * depth_mm),
     ):
         points.append(
             (
@@ -165,12 +166,24 @@ def build_scoop_cutter(
     if available_depth <= 0.0:
         raise ValueError(f"No valid scoop for {tool.name}: minimum floor consumes organizer height")
 
+    requested_grab_clearance = (
+        placement.grab_clearance_override_mm
+        if placement.grab_clearance_override_mm is not None
+        else layout.grab_clearance_mm
+    )
+    grab_clearance = float(requested_grab_clearance)
+    if not math.isfinite(grab_clearance) or grab_clearance < 0.0:
+        raise ValueError(f"No valid scoop for {tool.name}: grab clearance is invalid")
+    if grab_clearance <= 0.0:
+        raise ValueError(f"No valid scoop for {tool.name}: grab clearance is zero")
+
     edge, normal, tangent, relevant_span = _side_geometry(tool, placement)
     initial_width = min(24.0, max(12.0, 0.45 * relevant_span))
     nominal_depth = min(6.0, pocket_depth)
-    initial_depth = min(nominal_depth, available_depth)
+    maximum_depth_from_grab = grab_clearance / _OUTWARD_RADIUS_FACTOR
+    initial_depth = min(nominal_depth, available_depth, maximum_depth_from_grab)
     if initial_depth <= 0.0:
-        raise ValueError(f"No valid scoop for {tool.name}: insufficient depth above minimum floor")
+        raise ValueError(f"No valid scoop for {tool.name}: insufficient grab clearance or depth")
 
     wall = float(settings.minimum_wall_mm)
     usable = box(0.0, 0.0, layout.width_mm, layout.height_mm)
@@ -179,7 +192,7 @@ def build_scoop_cutter(
     if usable.is_empty:
         raise ValueError(f"No valid scoop for {tool.name}: minimum wall leaves no usable area")
 
-    floor_limited = initial_depth + 1e-9 < nominal_depth
+    constraint_limited = initial_depth + 1e-9 < nominal_depth
     for factor in _SHRINK_FACTORS:
         width = initial_width * factor
         depth = initial_depth * factor
@@ -198,9 +211,9 @@ def build_scoop_cutter(
             cutter=cutter,
             width_mm=width,
             depth_mm=depth,
-            shrunk=floor_limited or factor < 1.0,
+            shrunk=constraint_limited or factor < 1.0,
         )
 
     raise ValueError(
-        f"No valid scoop for {tool.name}: grab-side scoop cannot preserve boundary, wall, and floor limits"
+        f"No valid scoop for {tool.name}: grab-side scoop cannot preserve grab clearance, boundary, wall, and floor limits"
     )
