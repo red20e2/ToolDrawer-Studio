@@ -9,6 +9,7 @@ from tooldrawer_studio.generation.models import (
     GenerationIssue,
     GenerationValidationResult,
 )
+from tooldrawer_studio.generation.scoops import build_scoop_cutter
 from tooldrawer_studio.layout.geometry import oriented_cavity_polygon
 from tooldrawer_studio.layout.validation import validate_layout
 from tooldrawer_studio.measurement.depth import final_pocket_depth_mm
@@ -153,10 +154,12 @@ def validate_generation(
         if layout.mode == "gridfinity" and settings.gridfinity_height_snap:
             resolved_height = math.ceil((resolved_height / 7.0) - 1e-12) * 7.0
 
+    height_is_valid = False
     if resolved_height is not None:
         if not math.isfinite(resolved_height) or resolved_height <= 0.0:
             issues.append(_error("body_height", "Organizer height must be finite and positive"))
         else:
+            height_is_valid = True
             for tool_id, depth in sorted(depths.items()):
                 remaining = resolved_height - depth
                 if remaining + 1e-9 < floor:
@@ -237,6 +240,37 @@ def validate_generation(
                             f"{left_name} and {right_name} leave only {distance:.3f} mm between cavities",
                             left_id,
                             right_id,
+                        )
+                    )
+
+    if height_is_valid and resolved_height is not None:
+        for tool_id, depth in sorted(depths.items()):
+            tool = tools_by_id[tool_id]
+            placement = placements_by_id[tool_id]
+            try:
+                scoop = build_scoop_cutter(
+                    tool,
+                    placement,
+                    layout,
+                    settings,
+                    resolved_height,
+                    depth,
+                )
+            except ValueError as exc:
+                issues.append(
+                    _error(
+                        "scoop_invalid",
+                        str(exc),
+                        tool_id,
+                    )
+                )
+            else:
+                if scoop is not None and scoop.shrunk:
+                    issues.append(
+                        _warning(
+                            "scoop_shrunk",
+                            f"{tool.name} scoop was reduced to {scoop.width_mm:.3f} mm wide x {scoop.depth_mm:.3f} mm deep to preserve manufacturing limits",
+                            tool_id,
                         )
                     )
 
