@@ -50,29 +50,33 @@ def _minimal_v2_project() -> dict:
     }
 
 
-def test_current_schema_version_is_three_for_arrange_state():
-    assert CURRENT_SCHEMA_VERSION == 3
+def test_current_schema_version_is_four_for_generate_state():
+    assert CURRENT_SCHEMA_VERSION == 4
 
 
-def test_new_project_has_arrange_defaults_without_inventing_a_layout():
+def test_new_project_has_arrange_and_generate_defaults_without_inventing_a_layout():
     project = Project(id="p", name="P")
 
-    assert project.schema_version == 3
+    assert project.schema_version == 4
     assert project.default_layout_spacing_mm == 3.0
     assert project.default_layout_border_mm == 4.0
     assert project.default_grab_clearance_mm == 12.0
     assert project.default_snap_increment_mm == 1.0
     assert project.gridfinity_pitch_mm == 42.0
     assert project.layout is None
+    assert project.generation_settings.minimum_floor_mm == 2.0
+    assert project.generation_settings.minimum_wall_mm == 2.0
+    assert project.generation_state.last_generated_fingerprint is None
+    assert project.generation_state.review_required is True
 
 
-def test_v2_migration_preserves_measure_state_and_adds_only_arrange_defaults():
+def test_v2_migration_preserves_measure_state_and_adds_arrange_and_generate_defaults():
     original = _minimal_v2_project()
     original_tool = dict(original["tools"][0])
 
     migrated = migrate_project_dict(original, 2)
 
-    assert migrated["schema_version"] == 3
+    assert migrated["schema_version"] == 4
     assert migrated["default_exposed_height_mm"] == 4.5
     assert migrated["default_bottom_clearance_mm"] == 0.9
     assert migrated["default_layout_spacing_mm"] == 3.0
@@ -81,4 +85,8 @@ def test_v2_migration_preserves_measure_state_and_adds_only_arrange_defaults():
     assert migrated["default_snap_increment_mm"] == 1.0
     assert migrated["gridfinity_pitch_mm"] == 42.0
     assert migrated["layout"] is None
+    assert migrated["generation_settings"]["minimum_floor_mm"] == 2.0
+    assert migrated["generation_settings"]["minimum_wall_mm"] == 2.0
+    assert migrated["generation_state"]["last_generated_fingerprint"] is None
+    assert migrated["generation_state"]["review_required"] is True
     assert migrated["tools"][0] == original_tool
