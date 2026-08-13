@@ -100,18 +100,27 @@ def _candidate_footprint(
     width_mm: float,
     depth_mm: float,
 ) -> Polygon:
-    # The cylinder center sits 0.6 radii outside the cavity edge, so the
-    # rounded trough overlaps the cavity by 0.4 radii and extends 1.6 radii
-    # into the reserved grab region.
-    local = box(
-        -width_mm / 2.0,
-        -0.4 * depth_mm,
-        width_mm / 2.0,
-        1.6 * depth_mm,
-    )
-    tangent_angle = math.degrees(math.atan2(tangent[1], tangent[0]))
-    rotated = rotate(local, tangent_angle, origin=(0.0, 0.0), use_radians=False)
-    return translate(rotated, xoff=edge[0], yoff=edge[1])
+    # The rounded trough overlaps the cavity by 0.4 radii and extends 1.6
+    # radii into the selected grab direction. Build the corners directly
+    # from tangent/normal vectors so left/right handedness cannot flip.
+    points: list[tuple[float, float]] = []
+    for tangent_offset, normal_offset in (
+        (-width_mm / 2.0, -0.4 * depth_mm),
+        (width_mm / 2.0, -0.4 * depth_mm),
+        (width_mm / 2.0, 1.6 * depth_mm),
+        (-width_mm / 2.0, 1.6 * depth_mm),
+    ):
+        points.append(
+            (
+                edge[0]
+                + tangent[0] * tangent_offset
+                + normal[0] * normal_offset,
+                edge[1]
+                + tangent[1] * tangent_offset
+                + normal[1] * normal_offset,
+            )
+        )
+    return Polygon(points)
 
 
 def _cylinder_cutter(
