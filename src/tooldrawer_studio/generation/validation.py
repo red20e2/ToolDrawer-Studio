@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import math
 
-from shapely.geometry import box
+from shapely.geometry import Point, box
 
 from tooldrawer_studio.domain.models import Project
+from tooldrawer_studio.generation.gridfinity import (
+    PROFILE,
+    magnet_centers,
+    stacking_lip_xy_zone,
+)
 from tooldrawer_studio.generation.models import (
     GenerationIssue,
     GenerationValidationResult,
@@ -28,6 +33,84 @@ def _error(code: str, message: str, *tool_ids: str) -> GenerationIssue:
 
 def _warning(code: str, message: str, *tool_ids: str) -> GenerationIssue:
     return GenerationIssue(code, message, "warning", tuple(sorted(tool_ids)))
+
+
+def _gridfinity_feature_issues(
+    project: Project,
+    placed_geometry: list[tuple[str, str, object]],
+    depths: dict[str, float],
+    body_height_mm: float,
+    floor_mm: float,
+) -> list[GenerationIssue]:
+    layout = project.layout
+    assert layout is not None
+    if layout.mode != "gridfinity":
+        return []
+
+    settings = project.generation_settings
+    issues: list[GenerationIssue] = []
+    if (
+        settings.magnets_enabled
+        and settings.screw_holes_enabled
+        and settings.screw_diameter_mm >= settings.magnet_diameter_mm
+    ):
+        issues.append(
+            _error(
+                "gridfinity_combined_hole",
+                "Gridfinity screw diameter must remain smaller than the magnet recess diameter when both features are enabled",
+            )
+        )
+
+    centers = magnet_centers(layout)
+    lip_zone = stacking_lip_xy_zone(layout) if settings.stacking_lip_enabled else None
+    for tool_id, name, cavity in placed_geometry:
+        depth = depths.get(tool_id)
+        if depth is None:
+            continue
+        cavity_bottom = body_height_mm - depth
+
+        if settings.magnets_enabled:
+            for center in centers:
+                magnet_xy = Point(center).buffer(settings.magnet_diameter_mm / 2.0)
+                if cavity.intersection(magnet_xy).area <= _INTERSECTION_AREA_TOLERANCE:
+                    continue
+                remaining = cavity_bottom - settings.magnet_depth_mm
+                if remaining + 1e-9 < floor_mm:
+                    issues.append(
+                        _error(
+                            "gridfinity_magnet_collision",
+                            f"{name} cavity conflicts with a Gridfinity magnet recess and leaves {remaining:.3f} mm material; minimum is {floor_mm:.3f} mm",
+                            tool_id,
+                        )
+                    )
+                    break
+
+        if settings.screw_holes_enabled:
+            for center in centers:
+                screw_xy = Point(center).buffer(settings.screw_diameter_mm / 2.0)
+                if cavity.intersection(screw_xy).area <= _INTERSECTION_AREA_TOLERANCE:
+                    continue
+                remaining = cavity_bottom - PROFILE.base_height_mm
+                if remaining + 1e-9 < floor_mm:
+                    issues.append(
+                        _error(
+                            "gridfinity_screw_collision",
+                            f"{name} cavity conflicts with a Gridfinity screw passage and leaves {remaining:.3f} mm material; minimum is {floor_mm:.3f} mm",
+                            tool_id,
+                        )
+                    )
+                    break
+
+        if lip_zone is not None and cavity.intersection(lip_zone).area > _INTERSECTION_AREA_TOLERANCE:
+            issues.append(
+                _warning(
+                    "stacking_lip_omitted",
+                    f"{name} overlaps the stacking-lip region; the conflicting lip segment will be omitted",
+                    tool_id,
+                )
+            )
+
+    return issues
 
 
 def validate_generation(
@@ -244,6 +327,15 @@ def validate_generation(
                     )
 
     if height_is_valid and resolved_height is not None:
+        issues.extend(
+            _gridfinity_feature_issues(
+                project,
+                placed_geometry,
+                depths,
+                resolved_height,
+                floor,
+            )
+        )
         for tool_id, depth in sorted(depths.items()):
             tool = tools_by_id[tool_id]
             placement = placements_by_id[tool_id]
