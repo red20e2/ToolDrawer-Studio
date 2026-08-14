@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication
 from tooldrawer_studio.calibration.service import PixelPoint
 from tooldrawer_studio.capture.pending import CaptureSessionService
 from tooldrawer_studio.capture.webcam import CameraInfo, WebcamCaptureService
-from tooldrawer_studio.ui.main_window import MainWindow
+from tooldrawer_studio.ui.calibration_main_window import CalibrationMainWindow
 from tooldrawer_studio.ui.workflow_controller import WorkflowController
 
 
@@ -162,7 +162,7 @@ def test_multiple_promoted_captures_coexist_in_one_project(tmp_path: Path):
 
 def test_pending_capture_tray_lives_in_sidebar_and_promotion_updates_canvas():
     app = QApplication.instance() or QApplication([])
-    window = MainWindow()
+    window = CalibrationMainWindow()
     window.show()
     app.processEvents()
     try:
