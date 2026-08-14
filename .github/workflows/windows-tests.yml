@@ -54,9 +54,11 @@ jobs:
       - name: Inspect release artifacts
         shell: pwsh
         run: |
+          $AppVersion = (python -c "from tooldrawer_studio.version import __version__; print(__version__)").Trim()
+          if ([string]::IsNullOrWhiteSpace($AppVersion)) { throw "Application version is empty" }
           $Expected = @(
-            "artifacts/ToolDrawer-Studio-0.1.0-Setup.exe",
-            "artifacts/ToolDrawer-Studio-0.1.0-Portable.zip",
+            "artifacts/ToolDrawer-Studio-$AppVersion-Setup.exe",
+            "artifacts/ToolDrawer-Studio-$AppVersion-Portable.zip",
             "artifacts/SHA256SUMS.txt"
           )
           foreach ($Path in $Expected) {
@@ -71,6 +73,6 @@ jobs:
       - name: Upload Windows release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ToolDrawer-Studio-0.1.0-Windows
+          name: ToolDrawer-Studio-PR-${{ github.event.pull_request.number }}-Windows
           path: artifacts/
           if-no-files-found: error
