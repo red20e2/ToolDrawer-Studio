@@ -7,11 +7,11 @@ from PySide6.QtWidgets import QFileDialog, QMessageBox, QProgressBar
 from tooldrawer_studio.preferences import Preferences
 from tooldrawer_studio.project_state import ProjectEditTracker
 from tooldrawer_studio.ui.busy_scope import busy_ui
-from tooldrawer_studio.ui.main_window import MainWindow
+from tooldrawer_studio.ui.calibration_main_window import CalibrationMainWindow
 from tooldrawer_studio.ui.workflow_controller import WorkflowController
 
 
-class ReleaseMainWindow(MainWindow):
+class ReleaseMainWindow(CalibrationMainWindow):
     """Production shell for release-only persistence and safety behavior."""
 
     def __init__(self) -> None:
@@ -138,6 +138,7 @@ class ReleaseMainWindow(MainWindow):
                 self._update_calibration_status(calibration)
             else:
                 self.calibration_status.setText("Calibration: not set")
+                self.calibration_sidebar.set_calibration_status("Calibration: not set")
                 self.low_confidence_override.setChecked(False)
                 self.low_confidence_override.setVisible(False)
                 self.tabs.setTabEnabled(1, bool(self.controller.project.tools))
