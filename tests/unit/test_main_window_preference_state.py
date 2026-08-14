@@ -36,3 +36,40 @@ def test_launched_window_loads_persisted_dialog_directories(monkeypatch, tmp_pat
     finally:
         window.close()
     assert app is not None
+
+
+def test_release_window_restores_saved_normal_geometry(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    prefs = Preferences()
+    prefs.set_window_geometry(90, 70, 1320, 820, maximized=False)
+    prefs.save()
+
+    app = QApplication.instance() or QApplication([])
+    window = build_main_window()
+    window.show()
+    app.processEvents()
+    try:
+        geometry = window.geometry()
+        assert geometry.width() == 1320
+        assert geometry.height() == 820
+        assert window.isMaximized() is False
+    finally:
+        window.close()
+
+
+def test_release_window_saves_last_normal_geometry_on_close(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    app = QApplication.instance() or QApplication([])
+    window = build_main_window()
+    window.setGeometry(110, 85, 1450, 880)
+    window.show()
+    app.processEvents()
+    window.close()
+    app.processEvents()
+
+    saved = Preferences.load()
+    assert saved.window_x is not None
+    assert saved.window_y is not None
+    assert saved.window_width == 1450
+    assert saved.window_height == 880
+    assert saved.window_maximized is False
