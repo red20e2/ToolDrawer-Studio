@@ -57,6 +57,28 @@ def test_release_window_restores_saved_normal_geometry(monkeypatch, tmp_path: Pa
         window.close()
 
 
+def test_release_window_recenters_saved_geometry_that_is_offscreen(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    prefs = Preferences()
+    prefs.set_window_geometry(50000, 50000, 1320, 820, maximized=False)
+    prefs.save()
+
+    app = QApplication.instance() or QApplication([])
+    window = build_main_window()
+    window.show()
+    app.processEvents()
+    try:
+        geometry = window.geometry()
+        assert any(
+            geometry.intersects(screen.availableGeometry())
+            for screen in QApplication.screens()
+        )
+        assert geometry.width() == 1320
+        assert geometry.height() == 820
+    finally:
+        window.close()
+
+
 def test_release_window_saves_last_normal_geometry_on_close(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
     app = QApplication.instance() or QApplication([])
