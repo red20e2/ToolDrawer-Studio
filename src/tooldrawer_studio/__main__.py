@@ -1,15 +1,10 @@
-import sys
+from tooldrawer_studio.frozen_runtime import prepare_frozen_runtime
 
-from PySide6.QtWidgets import QApplication
+prepare_frozen_runtime()
 
-from tooldrawer_studio.ui.main_window import MainWindow
+from tooldrawer_studio.entrypoint import build_main_window, main
 
-
-def main() -> int:
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    return app.exec()
+__all__ = ["build_main_window", "main"]
 
 
 if __name__ == "__main__":
