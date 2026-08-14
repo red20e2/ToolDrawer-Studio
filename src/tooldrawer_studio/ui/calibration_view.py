@@ -377,13 +377,7 @@ class CalibrationImageView(QGraphicsView):
             marker.setZValue(10.0)
             self._overlay_items.append(marker)
 
-            label = QGraphicsSimpleTextItem(str(index + 1))
+            label = QGraphicsSimpleTextItem(str(index + 1), marker)
             label.setBrush(QBrush(QColor(210, 30, 30)))
-            label.setPos(QPointF(point.x_px + radius + 2.0, point.y_px - radius - 2.0))
-            label.setFlag(
-                QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations,
-                True,
-            )
-            label.setZValue(11.0)
-            self._scene.addItem(label)
-            self._overlay_items.append(label)
+            label.setPos(QPointF(radius + 2.0, -radius - 2.0))
+            label.setZValue(1.0)
