@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -54,25 +55,65 @@ class CaptureTrayWidget(QWidget):
         self,
         service: CaptureSessionService,
         parent: QWidget | None = None,
+        *,
+        compact: bool = False,
     ) -> None:
         super().__init__(parent)
         self._service = service
         self._promote_callback: Callable[[str], None] | None = None
+        self.compact = bool(compact)
 
-        layout = QHBoxLayout(self)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(4)
+
+        self.collapse_button: QToolButton | None = None
+        if self.compact:
+            self.collapse_button = QToolButton()
+            self.collapse_button.setText("Pending captures")
+            self.collapse_button.setCheckable(True)
+            self.collapse_button.setChecked(True)
+            self.collapse_button.setToolButtonStyle(
+                Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+            )
+            self.collapse_button.setArrowType(Qt.ArrowType.DownArrow)
+            self.collapse_button.toggled.connect(
+                lambda checked: self.set_collapsed(not checked)
+            )
+            root.addWidget(self.collapse_button)
+
+        self.body_widget = QWidget()
+        root.addWidget(self.body_widget)
+        body_layout = QVBoxLayout(self.body_widget) if self.compact else QHBoxLayout(self.body_widget)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(4)
+
         self.list_widget = QListWidget()
-        self.list_widget.setMinimumWidth(220)
         self.list_widget.currentItemChanged.connect(self._selection_changed)
-        layout.addWidget(self.list_widget, 1)
+        if self.compact:
+            self.list_widget.setMaximumHeight(110)
+            self.list_widget.setMinimumWidth(0)
+            body_layout.addWidget(self.list_widget)
+        else:
+            self.list_widget.setMinimumWidth(220)
+            body_layout.addWidget(self.list_widget, 1)
 
-        preview_layout = QVBoxLayout()
+        preview_widget = QWidget()
+        preview_layout = QVBoxLayout(preview_widget)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(4)
         self.preview_label = QLabel("No pending captures")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setMinimumSize(240, 180)
         self.preview_label.setScaledContents(False)
+        if self.compact:
+            self.preview_label.setMinimumSize(0, 80)
+            self.preview_label.setMaximumHeight(135)
+        else:
+            self.preview_label.setMinimumSize(240, 180)
         preview_layout.addWidget(self.preview_label, 1)
 
         actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
         self.rotate_button = QPushButton("Rotate 90°")
         self.delete_button = QPushButton("Delete")
         self.promote_button = QPushButton("Add to Project")
@@ -83,10 +124,24 @@ class CaptureTrayWidget(QWidget):
         actions.addWidget(self.delete_button)
         actions.addWidget(self.promote_button)
         preview_layout.addLayout(actions)
-        layout.addLayout(preview_layout, 2)
+        if self.compact:
+            body_layout.addWidget(preview_widget)
+        else:
+            body_layout.addWidget(preview_widget, 2)
 
         self._set_actions_enabled(False)
         self.refresh()
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        collapsed = bool(collapsed)
+        self.body_widget.setVisible(not collapsed)
+        if self.collapse_button is not None:
+            self.collapse_button.blockSignals(True)
+            self.collapse_button.setChecked(not collapsed)
+            self.collapse_button.setArrowType(
+                Qt.ArrowType.RightArrow if collapsed else Qt.ArrowType.DownArrow
+            )
+            self.collapse_button.blockSignals(False)
 
     def set_promote_callback(self, callback: Callable[[str], None]) -> None:
         self._promote_callback = callback
