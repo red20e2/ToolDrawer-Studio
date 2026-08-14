@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication
 
 from tooldrawer_studio.calibration.presets import A4
 from tooldrawer_studio.calibration.service import PixelPoint
-from tooldrawer_studio.ui.main_window import MainWindow
+from tooldrawer_studio.ui.calibration_main_window import CalibrationMainWindow
 from tooldrawer_studio.ui.workflow_controller import WorkflowController
 
 
@@ -47,7 +47,7 @@ def test_known_distance_calibration_runs_through_canvas_sidebar(
     simple_tools_image_path: Path,
 ):
     app = QApplication.instance() or QApplication([])
-    window = MainWindow()
+    window = CalibrationMainWindow()
     window.show()
     app.processEvents()
     try:
@@ -78,7 +78,7 @@ def test_failed_calibration_keeps_selected_points_for_correction(
     simple_tools_image_path: Path,
 ):
     app = QApplication.instance() or QApplication([])
-    window = MainWindow()
+    window = CalibrationMainWindow()
     errors: list[str] = []
     window._show_error = lambda exc: errors.append(str(exc))  # type: ignore[method-assign]
     window.show()
