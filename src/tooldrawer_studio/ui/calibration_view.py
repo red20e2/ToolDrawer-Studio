@@ -161,18 +161,28 @@ class CalibrationImageView(QGraphicsView):
         self._mark_manual_navigation()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
+        manual_center: QPointF | None = None
+        if not self._fit_mode and not self._pixmap_item.pixmap().isNull():
+            manual_center = self.mapToScene(self.viewport().rect().center())
         super().resizeEvent(event)
         if self._fit_mode:
             self.fit_image()
+        elif manual_center is not None:
+            self.centerOn(manual_center)
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         if self._pixmap_item.pixmap().isNull() or event.angleDelta().y() == 0:
             super().wheelEvent(event)
             return
+        viewport_position = event.position().toPoint()
+        scene_before = self.mapToScene(viewport_position)
         previous_anchor = self.transformationAnchor()
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         factor = 1.20 if event.angleDelta().y() > 0 else (1.0 / 1.20)
         self._set_zoom_scale(abs(float(self.transform().m11())) * factor)
+        scene_after = self.mapToScene(viewport_position)
+        delta = scene_after - scene_before
+        self.translate(delta.x(), delta.y())
         self.setTransformationAnchor(previous_anchor)
         event.accept()
 
