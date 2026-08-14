@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QProgressBar
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QProgressBar
 
 from tooldrawer_studio.preferences import Preferences
 from tooldrawer_studio.project_state import ProjectEditTracker
@@ -35,7 +35,20 @@ class ReleaseMainWindow(CalibrationMainWindow):
         )
         if all(value is not None for value in values):
             x, y, width, height = values
-            self.setGeometry(int(x), int(y), int(width), int(height))  # type: ignore[arg-type]
+            saved = QRect(
+                int(x),  # type: ignore[arg-type]
+                int(y),  # type: ignore[arg-type]
+                max(self.minimumWidth(), int(width)),  # type: ignore[arg-type]
+                max(self.minimumHeight(), int(height)),  # type: ignore[arg-type]
+            )
+            screens = QApplication.screens()
+            if screens and not any(
+                saved.intersects(screen.availableGeometry()) for screen in screens
+            ):
+                primary = QApplication.primaryScreen()
+                if primary is not None:
+                    saved.moveCenter(primary.availableGeometry().center())
+            self.setGeometry(saved)
         if self.preferences.window_maximized:
             self.setWindowState(
                 self.windowState() | Qt.WindowState.WindowMaximized
