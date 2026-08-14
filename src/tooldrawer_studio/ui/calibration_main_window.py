@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QWidget
 
 from tooldrawer_studio.domain.models import CalibrationRecord
@@ -19,6 +20,24 @@ class CalibrationMainWindow(LegacyMainWindow):
         super().__init__()
         self.setMinimumSize(1100, 700)
         self.resize(1400, 900)
+        self._was_maximized_before_fullscreen = False
+        self.fullscreen_action = QAction("Fullscreen Workspace", self)
+        self.fullscreen_action.setShortcut(QKeySequence("F11"))
+        self.fullscreen_action.setShortcutContext(
+            self.fullscreen_action.shortcutContext()
+        )
+        self.fullscreen_action.triggered.connect(self.toggle_fullscreen)
+        self.addAction(self.fullscreen_action)
+
+    def toggle_fullscreen(self) -> None:
+        if self.isFullScreen():
+            was_maximized = self._was_maximized_before_fullscreen
+            self.showNormal()
+            if was_maximized:
+                self.showMaximized()
+            return
+        self._was_maximized_before_fullscreen = self.isMaximized()
+        self.showFullScreen()
 
     def _capture_stage(self) -> QWidget:
         self.calibration_workspace = CalibrationWorkspace(self.capture_session)
