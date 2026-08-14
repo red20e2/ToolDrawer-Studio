@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import cv2
 import numpy as np
 
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QApplication
+
 from tooldrawer_studio.calibration.service import PixelPoint
 from tooldrawer_studio.capture.pending import CaptureSessionService
 from tooldrawer_studio.capture.webcam import CameraInfo, WebcamCaptureService
+from tooldrawer_studio.ui.main_window import MainWindow
 from tooldrawer_studio.ui.workflow_controller import WorkflowController
 
 
@@ -152,3 +158,26 @@ def test_multiple_promoted_captures_coexist_in_one_project(tmp_path: Path):
         second_id,
     ]
     assert reopened.active_capture_id == second_id
+
+
+def test_pending_capture_tray_lives_in_sidebar_and_promotion_updates_canvas():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window.show()
+    app.processEvents()
+    try:
+        pending = window.capture_session.add_bytes("phone", _png_bytes(90, 60), "phone.png")
+        window._capture_source_changed()
+        app.processEvents()
+
+        assert window.calibration_sidebar.capture_tray is window.capture_tray
+        assert window.calibration_sidebar.capture_tray.list_widget.count() == 1
+
+        window._promote_pending_capture(pending.id)
+        app.processEvents()
+
+        assert window.controller.project.captures[-1].filename == "phone.png"
+        assert window.calibration_view.sceneRect().width() == 90
+        assert window.calibration_view.sceneRect().height() == 60
+    finally:
+        window.close()
