@@ -7,6 +7,8 @@ from pathlib import Path
 from tooldrawer_studio.app_paths import preferences_path
 
 MAX_RECENT_PROJECTS = 10
+MIN_WINDOW_WIDTH = 1100
+MIN_WINDOW_HEIGHT = 700
 
 
 def _absolute_directory(value: object) -> str | None:
@@ -18,12 +20,23 @@ def _absolute_directory(value: object) -> str | None:
     return str(candidate.resolve())
 
 
+def _plain_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return int(value)
+
+
 @dataclass(slots=True)
 class Preferences:
     recent_projects: list[str] = field(default_factory=list)
     project_directory: str | None = None
     export_directory: str | None = None
     photo_import_directory: str | None = None
+    window_x: int | None = None
+    window_y: int | None = None
+    window_width: int | None = None
+    window_height: int | None = None
+    window_maximized: bool = False
 
     @classmethod
     def load(cls) -> "Preferences":
@@ -51,11 +64,37 @@ class Preferences:
                 if len(recent) >= MAX_RECENT_PROJECTS:
                     break
 
+        window_x = _plain_int(payload.get("window_x"))
+        window_y = _plain_int(payload.get("window_y"))
+        window_width = _plain_int(payload.get("window_width"))
+        window_height = _plain_int(payload.get("window_height"))
+        geometry_valid = (
+            window_x is not None
+            and window_y is not None
+            and window_width is not None
+            and window_height is not None
+            and window_width >= MIN_WINDOW_WIDTH
+            and window_height >= MIN_WINDOW_HEIGHT
+        )
+        if not geometry_valid:
+            window_x = None
+            window_y = None
+            window_width = None
+            window_height = None
+
+        raw_maximized = payload.get("window_maximized", False)
+        window_maximized = raw_maximized if isinstance(raw_maximized, bool) else False
+
         return cls(
             recent_projects=recent,
             project_directory=_absolute_directory(payload.get("project_directory")),
             export_directory=_absolute_directory(payload.get("export_directory")),
             photo_import_directory=_absolute_directory(payload.get("photo_import_directory")),
+            window_x=window_x,
+            window_y=window_y,
+            window_width=window_width,
+            window_height=window_height,
+            window_maximized=window_maximized,
         )
 
     def add_recent_project(self, path: Path) -> None:
@@ -74,6 +113,29 @@ class Preferences:
 
     def set_photo_import_directory(self, path: Path) -> None:
         self.photo_import_directory = str(path.expanduser().resolve())
+
+    def set_window_geometry(
+        self,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        *,
+        maximized: bool,
+    ) -> None:
+        if isinstance(x, bool) or isinstance(y, bool):
+            raise ValueError("Window position must use integer coordinates")
+        if isinstance(width, bool) or isinstance(height, bool):
+            raise ValueError("Window size must use integer dimensions")
+        if width < MIN_WINDOW_WIDTH or height < MIN_WINDOW_HEIGHT:
+            raise ValueError(
+                f"Window size must be at least {MIN_WINDOW_WIDTH} x {MIN_WINDOW_HEIGHT}"
+            )
+        self.window_x = int(x)
+        self.window_y = int(y)
+        self.window_width = int(width)
+        self.window_height = int(height)
+        self.window_maximized = bool(maximized)
 
     def save(self) -> None:
         destination = preferences_path()
