@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFileDialog, QMessageBox, QProgressBar
 
 from tooldrawer_studio.preferences import Preferences
@@ -17,12 +18,44 @@ class ReleaseMainWindow(CalibrationMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.preferences = Preferences.load()
+        self._restore_window_state()
         self.project_edit_tracker = ProjectEditTracker(self.controller.project)
         self.operation_progress = QProgressBar(self)
         self.operation_progress.setVisible(False)
         self.operation_progress.setTextVisible(True)
         self.operation_progress.setMinimumWidth(220)
         self.statusBar().addPermanentWidget(self.operation_progress)
+
+    def _restore_window_state(self) -> None:
+        values = (
+            self.preferences.window_x,
+            self.preferences.window_y,
+            self.preferences.window_width,
+            self.preferences.window_height,
+        )
+        if all(value is not None for value in values):
+            x, y, width, height = values
+            self.setGeometry(int(x), int(y), int(width), int(height))  # type: ignore[arg-type]
+        if self.preferences.window_maximized:
+            self.setWindowState(
+                self.windowState() | Qt.WindowState.WindowMaximized
+            )
+
+    def _save_window_state(self) -> None:
+        maximized = self.isMaximized() or (
+            self.isFullScreen() and self._was_maximized_before_fullscreen
+        )
+        geometry = self.normalGeometry() if (maximized or self.isFullScreen()) else self.geometry()
+        width = max(self.minimumWidth(), geometry.width())
+        height = max(self.minimumHeight(), geometry.height())
+        self.preferences.set_window_geometry(
+            geometry.x(),
+            geometry.y(),
+            width,
+            height,
+            maximized=maximized,
+        )
+        self.preferences.save()
 
     def _dialog_directory(self, kind: str) -> str:
         values = {
@@ -189,4 +222,5 @@ class ReleaseMainWindow(CalibrationMainWindow):
         if self.isVisible() and not self._confirm_discard_unsaved():
             event.ignore()
             return
+        self._save_window_state()
         super().closeEvent(event)
