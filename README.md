@@ -4,6 +4,21 @@ ToolDrawer Studio is a pre-release, open-source Windows desktop application for 
 
 The current V0.1 foundation now covers the complete manufacturing path: import or capture source photos, calibrate pixels to millimetres, trace and refine tool silhouettes, measure physical tool thickness from an independently calibrated side view, arrange real cleared cavity contours inside foam/drawer or Gridfinity boundaries, generate a validated multi-tool organizer solid with per-tool pocket depths and removal access, preview it in 3D, save/reopen editable `.tds` projects, and export the complete organizer as STEP, STL, and DXF.
 
+## Windows x64 distribution
+
+ToolDrawer Studio 0.1.0 is packaged for **Windows x64** in two forms:
+
+- `ToolDrawer-Studio-0.1.0-Setup.exe` installs the self-contained application for the current Windows user. Python is not required on the destination computer.
+- `ToolDrawer-Studio-0.1.0-Portable.zip` is the **Portable** one-directory build. Extract it to a normal writable folder and run `ToolDrawer Studio.exe` from the extracted folder.
+
+The current 0.1.0 binaries are **unsigned**, so Windows may show an unknown-publisher or SmartScreen warning. Verify the downloaded installer or Portable ZIP against `SHA256SUMS.txt` before use.
+
+Normal project editing, CAD generation, and STEP/STL/DXF export are local-first and can operate **offline**. Phone capture requires only a suitable private local network connection and does not use a cloud relay.
+
+Preferences, recent-project history, and diagnostic logs are stored under `%LOCALAPPDATA%\ToolDrawer Studio`. User `.tds` project files remain wherever the user saves them and are not removed by uninstalling the application. The current editable project format is `.tds` schema **V4**.
+
+The `v0.1.0` GitHub release is intentionally a pre-release until the real manufactured-sample checklist in `docs/V0.1_MANUFACTURING_VALIDATION.md` passes. Automated Windows CI and frozen manufacturing self-tests are required gates, but they do not replace **physical validation** of actual fit and dimensions.
+
 ## Capture workflow
 
 ToolDrawer Studio can receive images three ways:
