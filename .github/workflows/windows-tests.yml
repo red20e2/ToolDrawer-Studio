@@ -51,6 +51,23 @@ jobs:
       - name: Build release artifacts
         shell: pwsh
         run: ./packaging/build_artifacts.ps1
+      - name: Inspect release artifacts
+        shell: pwsh
+        run: |
+          $Expected = @(
+            "artifacts/ToolDrawer-Studio-0.1.0-Setup.exe",
+            "artifacts/ToolDrawer-Studio-0.1.0-Portable.zip",
+            "artifacts/SHA256SUMS.txt"
+          )
+          foreach ($Path in $Expected) {
+            if (-not (Test-Path $Path -PathType Leaf)) { throw "Missing release artifact: $Path" }
+            $Item = Get-Item $Path
+            if ($Item.Length -le 0) { throw "Empty release artifact: $Path" }
+            Write-Host ("artifact={0} bytes={1}" -f $Item.Name, $Item.Length)
+          }
+          Write-Host "sha256-manifest-begin"
+          Get-Content artifacts/SHA256SUMS.txt
+          Write-Host "sha256-manifest-end"
       - name: Upload Windows release artifacts
         uses: actions/upload-artifact@v4
         with:
