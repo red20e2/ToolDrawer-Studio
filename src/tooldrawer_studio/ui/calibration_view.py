@@ -44,6 +44,7 @@ class CalibrationImageView(QGraphicsView):
         self._dragging_point = False
         self._fit_mode = True
         self._manual_navigation = False
+        self._manual_center_scene: QPointF | None = None
         self._space_down = False
         self._panning = False
         self._pan_start = QPoint()
@@ -124,6 +125,12 @@ class CalibrationImageView(QGraphicsView):
         if changed:
             self.fitModeChanged.emit(False)
 
+    def _remember_manual_center(self) -> None:
+        if not self._pixmap_item.pixmap().isNull():
+            self._manual_center_scene = self.mapToScene(
+                self.viewport().rect().center()
+            )
+
     def fit_image(self) -> None:
         pixmap = self._pixmap_item.pixmap()
         if pixmap.isNull():
@@ -135,6 +142,7 @@ class CalibrationImageView(QGraphicsView):
         )
         self._fit_mode = True
         self._manual_navigation = False
+        self._manual_center_scene = None
         self._emit_view_state()
 
     def set_actual_size(self) -> None:
@@ -145,6 +153,7 @@ class CalibrationImageView(QGraphicsView):
         self.resetTransform()
         self.centerOn(center)
         self._mark_manual_navigation()
+        self._manual_center_scene = QPointF(center)
 
     def _set_zoom_scale(self, scale: float) -> None:
         pixmap = self._pixmap_item.pixmap()
@@ -161,10 +170,11 @@ class CalibrationImageView(QGraphicsView):
         self._mark_manual_navigation()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
-        manual_center: QPointF | None = None
+        manual_center = self._manual_center_scene
         old_size = event.oldSize()
         if (
-            not self._fit_mode
+            manual_center is None
+            and not self._fit_mode
             and not self._pixmap_item.pixmap().isNull()
             and old_size.isValid()
         ):
@@ -177,6 +187,7 @@ class CalibrationImageView(QGraphicsView):
                 (old_viewport_height - 1) // 2,
             )
             manual_center = self.mapToScene(old_center)
+            self._manual_center_scene = QPointF(manual_center)
         super().resizeEvent(event)
         if self._fit_mode:
             self.fit_image()
@@ -197,6 +208,7 @@ class CalibrationImageView(QGraphicsView):
         delta = scene_after - scene_before
         self.translate(delta.x(), delta.y())
         self.setTransformationAnchor(previous_anchor)
+        self._remember_manual_center()
         event.accept()
 
     def _restore_interaction_cursor(self) -> None:
@@ -311,6 +323,7 @@ class CalibrationImageView(QGraphicsView):
                 self.verticalScrollBar().value() - delta.y()
             )
             self._mark_manual_navigation()
+            self._remember_manual_center()
             event.accept()
             return
 
