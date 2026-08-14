@@ -9,10 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  release:
+  build:
     runs-on: windows-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -38,6 +36,28 @@ jobs:
       - name: Build and verify release artifacts
         shell: pwsh
         run: ./packaging/build_artifacts.ps1 -AppVersion 0.1.0
+
+      - name: Stage release payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ToolDrawer-Studio-0.1.0-Release
+          path: artifacts/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v4
+
+      - name: Download verified release payload
+        uses: actions/download-artifact@v4
+        with:
+          name: ToolDrawer-Studio-0.1.0-Release
+          path: artifacts
 
       - name: Publish GitHub pre-release
         shell: pwsh
