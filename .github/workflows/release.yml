@@ -1,0 +1,53 @@
+name: V0.1 Tagged Pre-Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      - name: Validate tag matches application version
+        run: python packaging/check_version.py "${{ github.ref_name }}"
+
+      - name: Install package and test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      # packaging/build_artifacts.ps1 invokes packaging/build_app.ps1 and
+      # packaging/verify_frozen.ps1 before producing the distributable files.
+      - name: Build and verify release artifacts
+        shell: pwsh
+        run: ./packaging/build_artifacts.ps1 -AppVersion 0.1.0
+
+      - name: Publish GitHub pre-release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            "artifacts/ToolDrawer-Studio-0.1.0-Setup.exe" `
+            "artifacts/ToolDrawer-Studio-0.1.0-Portable.zip" `
+            "artifacts/SHA256SUMS.txt" `
+            --title "ToolDrawer Studio 0.1.0" `
+            --notes-file "docs/V0.1_RELEASE_NOTES.md" `
+            --prerelease
