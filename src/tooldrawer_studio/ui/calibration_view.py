@@ -162,8 +162,21 @@ class CalibrationImageView(QGraphicsView):
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         manual_center: QPointF | None = None
-        if not self._fit_mode and not self._pixmap_item.pixmap().isNull():
-            manual_center = self.mapToScene(self.viewport().rect().center())
+        old_size = event.oldSize()
+        if (
+            not self._fit_mode
+            and not self._pixmap_item.pixmap().isNull()
+            and old_size.isValid()
+        ):
+            chrome_width = max(0, event.size().width() - self.viewport().width())
+            chrome_height = max(0, event.size().height() - self.viewport().height())
+            old_viewport_width = max(1, old_size.width() - chrome_width)
+            old_viewport_height = max(1, old_size.height() - chrome_height)
+            old_center = QPoint(
+                (old_viewport_width - 1) // 2,
+                (old_viewport_height - 1) // 2,
+            )
+            manual_center = self.mapToScene(old_center)
         super().resizeEvent(event)
         if self._fit_mode:
             self.fit_image()
