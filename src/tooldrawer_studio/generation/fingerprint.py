@@ -38,6 +38,7 @@ def _generation_settings_payload(project: Project) -> dict[str, object]:
         "screw_diameter_mm": settings.screw_diameter_mm,
         "stacking_lip_enabled": settings.stacking_lip_enabled,
         "gridfinity_height_snap": settings.gridfinity_height_snap,
+        "labels_enabled": settings.labels_enabled,
     }
 
 
@@ -49,6 +50,7 @@ def generation_input_payload(project: Project) -> dict[str, object]:
         tools.append(
             {
                 "id": tool.id,
+                "name": tool.name if project.generation_settings.labels_enabled else None,
                 "contour_mm": [
                     [float(point.x_mm), float(point.y_mm)] for point in tool.contour_mm
                 ],

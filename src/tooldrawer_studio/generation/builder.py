@@ -16,6 +16,7 @@ from tooldrawer_studio.generation.gridfinity import (
     build_gridfinity_body,
     gridfinity_feature_cutters,
 )
+from tooldrawer_studio.generation.labels import apply_pocket_labels
 from tooldrawer_studio.generation.models import GenerationIssue
 from tooldrawer_studio.generation.scoops import build_scoop_cutter
 from tooldrawer_studio.generation.validation import validate_generation
@@ -135,6 +136,12 @@ def generate_organizer(project: Project) -> GenerationResult:
             )
             if scoop is not None:
                 body = body.cut(scoop.cutter)
+
+        if project.generation_settings.labels_enabled:
+            body, label_warnings = apply_pocket_labels(
+                body, placed_tool_depths(project), height
+            )
+            warnings.extend(label_warnings)
 
         body = body.clean()
         _assert_valid_single_solid(body)

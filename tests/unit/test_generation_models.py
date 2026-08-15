@@ -35,6 +35,7 @@ def test_generation_defaults_are_manufacturing_safe():
     assert settings.screw_diameter_mm == 3.2
     assert settings.stacking_lip_enabled is True
     assert settings.gridfinity_height_snap is True
+    assert settings.labels_enabled is True
     assert state.last_generated_fingerprint is None
     assert state.last_generated_height_mm is None
     assert state.review_required is True

@@ -70,9 +70,13 @@ def test_generate_workflow_builds_exports_and_reopens_without_silent_regeneratio
     assert outputs.step is not None and outputs.step.exists()
     assert outputs.stl is not None and outputs.stl.exists()
     assert outputs.dxf is not None and outputs.dxf.exists()
+    assert outputs.svg is not None and outputs.svg.exists()
+    assert outputs.pdf is not None and outputs.pdf.exists()
     assert outputs.step.stat().st_size > 100
     assert outputs.stl.stat().st_size > 100
     assert outputs.dxf.stat().st_size > 100
+    assert outputs.svg.stat().st_size > 100
+    assert outputs.pdf.stat().st_size > 100
 
     project_path = tmp_path / "drawer.tds"
     controller.save(project_path)

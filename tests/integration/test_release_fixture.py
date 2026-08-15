@@ -8,7 +8,7 @@ from tooldrawer_studio.release_fixture import build_release_fixture
 
 
 def _assert_exports_exist(paths) -> None:
-    for path in (paths.step, paths.stl, paths.dxf):
+    for path in (paths.step, paths.stl, paths.dxf, paths.svg, paths.pdf):
         assert path is not None
         assert Path(path).is_file()
         assert Path(path).stat().st_size > 0

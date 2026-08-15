@@ -80,8 +80,16 @@ def test_generation_setting_change_marks_generation_stale():
     assert not controller.generation_is_current()
 
 
-def test_tool_rename_does_not_stale_geometry():
+def test_tool_rename_stales_generation_when_labels_are_enabled():
     controller = _controller()
+    controller.generate_organizer()
+    controller.rename_tool("tool-1", "Renamed Ratchet")
+    assert not controller.generation_is_current()
+
+
+def test_tool_rename_does_not_stale_when_labels_are_disabled():
+    controller = _controller()
+    controller.set_generation_settings(labels_enabled=False)
     controller.generate_organizer()
     controller.rename_tool("tool-1", "Renamed Ratchet")
     assert controller.generation_is_current()

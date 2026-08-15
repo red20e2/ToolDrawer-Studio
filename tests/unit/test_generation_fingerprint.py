@@ -91,6 +91,16 @@ def test_project_name_does_not_invalidate_geometry_fingerprint():
     assert generation_fingerprint(project) == before
 
 
+def test_fingerprint_changes_when_labels_or_labeled_name_change():
+    project = _foam_project()
+    before = generation_fingerprint(project)
+    project.generation_settings.labels_enabled = False
+    assert generation_fingerprint(project) != before
+    project.generation_settings.labels_enabled = True
+    project.tools[0].name = "Renamed"
+    assert generation_fingerprint(project) != before
+
+
 def test_auto_foam_height_is_deepest_pocket_plus_floor():
     project = _foam_project()
     project.generation_settings.minimum_floor_mm = 2.0

@@ -148,6 +148,7 @@ def _generation_settings_to_dict(settings: GenerationSettings) -> dict:
         "screw_diameter_mm": settings.screw_diameter_mm,
         "stacking_lip_enabled": settings.stacking_lip_enabled,
         "gridfinity_height_snap": settings.gridfinity_height_snap,
+        "labels_enabled": settings.labels_enabled,
     }
 
 
@@ -170,6 +171,7 @@ def _generation_settings_from_dict(data: dict | None) -> GenerationSettings:
         screw_diameter_mm=float(payload.get("screw_diameter_mm", 3.2)),
         stacking_lip_enabled=bool(payload.get("stacking_lip_enabled", True)),
         gridfinity_height_snap=bool(payload.get("gridfinity_height_snap", True)),
+        labels_enabled=bool(payload.get("labels_enabled", True)),
     )
 
 

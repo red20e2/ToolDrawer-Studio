@@ -38,6 +38,7 @@ class GenerationSettings:
     screw_diameter_mm: float = 3.2
     stacking_lip_enabled: bool = True
     gridfinity_height_snap: bool = True
+    labels_enabled: bool = True
 
     def __post_init__(self) -> None:
         if self.height_mode not in {"auto", "manual"}:
@@ -123,6 +124,7 @@ def generation_settings_defaults_dict() -> dict[str, object]:
         "screw_diameter_mm": 3.2,
         "stacking_lip_enabled": True,
         "gridfinity_height_snap": True,
+        "labels_enabled": True,
     }
 
 

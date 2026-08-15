@@ -61,7 +61,11 @@ def test_save_export_stage_has_individual_and_all_manufacturing_actions():
     assert window.export_step_button.text() == "Export STEP"
     assert window.export_stl_button.text() == "Export STL"
     assert window.export_dxf_button.text() == "Export DXF"
+    assert window.export_svg_button.text() == "Export 1:1 SVG"
+    assert window.export_pdf_button.text() == "Export 1:1 PDF"
     assert window.export_all_button.text() == "Export All"
+    assert window.open_orca_button.text() == "Open STL in OrcaSlicer"
+    assert window.open_freecad_button.text() == "Open STEP in FreeCAD"
     window.close()
 
 
@@ -71,6 +75,8 @@ def test_export_buttons_are_disabled_until_generation_is_current():
         window.export_step_button,
         window.export_stl_button,
         window.export_dxf_button,
+        window.export_svg_button,
+        window.export_pdf_button,
         window.export_all_button,
     )
     assert all(not button.isEnabled() for button in buttons)

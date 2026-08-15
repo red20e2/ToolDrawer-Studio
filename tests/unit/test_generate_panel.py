@@ -55,6 +55,7 @@ def test_panel_exposes_manufacturing_controls_and_generate_action():
     assert panel.minimum_floor.value() == 2.0
     assert panel.minimum_wall.value() == 2.0
     assert panel.scoops_enabled.isChecked()
+    assert panel.labels_enabled.isChecked()
     assert panel.generate_button.text() == "Generate Organizer"
     panel.close()
     assert app is not None

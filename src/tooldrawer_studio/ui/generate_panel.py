@@ -48,6 +48,9 @@ class GeneratePanel(QWidget):
         form.addRow("Minimum floor", self.minimum_floor)
         form.addRow("Minimum wall", self.minimum_wall)
         form.addRow("Scoops", self.scoops_enabled)
+        self.labels_enabled = QCheckBox("Engrave tool names on pocket floors")
+        self.labels_enabled.setChecked(True)
+        form.addRow("Labels", self.labels_enabled)
 
         self.tool_selector_label = QLabel("Tool scoop override")
         self.tool_selector = QComboBox()
@@ -106,6 +109,9 @@ class GeneratePanel(QWidget):
         )
         self.scoops_enabled.toggled.connect(
             lambda value: self._emit_setting("scoops_enabled", bool(value))
+        )
+        self.labels_enabled.toggled.connect(
+            lambda value: self._emit_setting("labels_enabled", bool(value))
         )
         self.magnets_enabled.toggled.connect(
             lambda value: self._emit_setting("magnets_enabled", bool(value))
@@ -217,6 +223,7 @@ class GeneratePanel(QWidget):
             self.minimum_floor.setValue(settings.minimum_floor_mm)
             self.minimum_wall.setValue(settings.minimum_wall_mm)
             self.scoops_enabled.setChecked(settings.scoops_enabled)
+            self.labels_enabled.setChecked(settings.labels_enabled)
             self.magnets_enabled.setChecked(settings.magnets_enabled)
             self.magnet_diameter.setValue(settings.magnet_diameter_mm)
             self.magnet_depth.setValue(settings.magnet_depth_mm)
