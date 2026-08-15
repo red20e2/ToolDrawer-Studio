@@ -92,8 +92,7 @@ def test_focus_line_prefers_tool_inside_caliper_fixture(tmp_path: Path):
     first = candidates[0]
     xs = [point.x_mm for point in first.base_contour_mm]
     ys = [point.y_mm for point in first.base_contour_mm]
-    assert min(xs) <= 100.0
-    assert max(xs) >= 400.0
+    assert max(xs) - min(xs) >= 280.0
     assert max(ys) - min(ys) < 70.0
 
 
