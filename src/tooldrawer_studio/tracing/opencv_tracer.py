@@ -5,7 +5,7 @@ from math import hypot
 import cv2
 import numpy as np
 from shapely import make_valid
-from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
+from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from tooldrawer_studio.calibration.service import PixelPoint, pixel_to_mm
@@ -149,12 +149,222 @@ def _select_foreground_mask(binary: np.ndarray, inverse: np.ndarray) -> np.ndarr
     return binary if binary_coverage <= inverse_coverage else inverse
 
 
+def _global_foreground_mask(pixels_bgr: np.ndarray) -> np.ndarray:
+    gray = cv2.cvtColor(pixels_bgr, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, binary = cv2.threshold(
+        blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
+    )
+    _, inverse = cv2.threshold(
+        blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+    )
+    mask = _select_foreground_mask(binary, inverse)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+    return mask
+
+
+def _focus_line_mask(
+    pixels_bgr: np.ndarray,
+    focus_line_px: tuple[PixelPoint, PixelPoint],
+) -> np.ndarray | None:
+    first, second = focus_line_px
+    dx = float(second.x_px - first.x_px)
+    dy = float(second.y_px - first.y_px)
+    line_length = hypot(dx, dy)
+    if line_length < 12.0:
+        return None
+
+    height, width = pixels_bgr.shape[:2]
+    if width <= 0 or height <= 0:
+        return None
+
+    ax = int(round(first.x_px))
+    ay = int(round(first.y_px))
+    bx = int(round(second.x_px))
+    by = int(round(second.y_px))
+    if (
+        max(ax, bx) < 0
+        or max(ay, by) < 0
+        or min(ax, bx) >= width
+        or min(ay, by) >= height
+    ):
+        return None
+
+    # The known-distance line is a strong clue in real capture workflows: users
+    # commonly measure the tool with a ruler or caliper, so the intended object
+    # crosses this line while the larger reference fixture surrounds it. Restrict
+    # GrabCut to a capsule around the line instead of allowing the fixture to win
+    # merely because it owns more pixels.
+    half_width = int(
+        round(max(8.0, min(0.09 * line_length, 0.22 * min(width, height))))
+    )
+    grabcut_mask = np.full((height, width), cv2.GC_BGD, dtype=np.uint8)
+    thickness = max(3, half_width * 2)
+    cv2.line(
+        grabcut_mask,
+        (ax, ay),
+        (bx, by),
+        cv2.GC_PR_FGD,
+        thickness=thickness,
+        lineType=cv2.LINE_AA,
+    )
+    cv2.circle(grabcut_mask, (ax, ay), half_width, cv2.GC_PR_FGD, -1)
+    cv2.circle(grabcut_mask, (bx, by), half_width, cv2.GC_PR_FGD, -1)
+
+    midpoint = (int(round((ax + bx) / 2.0)), int(round((ay + by) / 2.0)))
+    seed_radius = max(3, min(half_width // 4, 12))
+    cv2.circle(grabcut_mask, midpoint, seed_radius, cv2.GC_FGD, -1)
+
+    background_model = np.zeros((1, 65), np.float64)
+    foreground_model = np.zeros((1, 65), np.float64)
+    try:
+        cv2.grabCut(
+            pixels_bgr,
+            grabcut_mask,
+            None,
+            background_model,
+            foreground_model,
+            5,
+            cv2.GC_INIT_WITH_MASK,
+        )
+    except cv2.error:
+        return None
+
+    foreground = np.where(
+        (grabcut_mask == cv2.GC_FGD) | (grabcut_mask == cv2.GC_PR_FGD),
+        255,
+        0,
+    ).astype(np.uint8)
+    foreground_count = int(np.count_nonzero(foreground))
+    if foreground_count < 20:
+        return None
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    foreground = cv2.morphologyEx(
+        foreground, cv2.MORPH_CLOSE, kernel, iterations=1
+    )
+    foreground = cv2.morphologyEx(
+        foreground, cv2.MORPH_OPEN, kernel, iterations=1
+    )
+    return foreground
+
+
+def _candidates_from_mask(
+    mask: np.ndarray,
+    calibration: CalibrationRecord,
+    config: TraceConfig,
+) -> list[TraceCandidate]:
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    height, width = mask.shape[:2]
+    candidates: list[TraceCandidate] = []
+    for contour in contours:
+        pixel_vertices = contour.reshape(-1, 2)
+        if len(pixel_vertices) < 3:
+            continue
+        mm_points = [
+            pixel_to_mm(
+                calibration,
+                PixelPoint(float(vertex[0]), float(vertex[1])),
+            )
+            for vertex in pixel_vertices
+        ]
+        simplified = _simplify_closed(mm_points, config.simplify_mm)
+        components = _valid_contour_components(simplified)
+        if not components:
+            components = _valid_contour_components(mm_points)
+        touches_border = any(
+            int(vertex[0]) <= 0
+            or int(vertex[1]) <= 0
+            or int(vertex[0]) >= width - 1
+            or int(vertex[1]) >= height - 1
+            for vertex in pixel_vertices
+        )
+        for repaired_contour, area_mm2 in components:
+            if area_mm2 < config.min_area_mm2:
+                continue
+            confidence = 1.0
+            if touches_border:
+                confidence -= 0.35
+            if len(repaired_contour) < 4:
+                confidence -= 0.15
+            confidence = max(0.0, min(1.0, confidence))
+            candidates.append(
+                TraceCandidate(
+                    base_contour_mm=repaired_contour,
+                    confidence=confidence,
+                    area_mm2=area_mm2,
+                )
+            )
+    candidates.sort(key=lambda candidate: candidate.area_mm2, reverse=True)
+    return candidates
+
+
+def _candidate_polygon(candidate: TraceCandidate) -> Polygon | None:
+    polygon = Polygon(
+        [(point.x_mm, point.y_mm) for point in candidate.base_contour_mm]
+    )
+    if polygon.is_empty or not polygon.is_valid or polygon.area <= 1e-9:
+        return None
+    return polygon
+
+
+def _focus_sort_key(
+    candidate: TraceCandidate,
+    calibration: CalibrationRecord,
+    focus_line_px: tuple[PixelPoint, PixelPoint],
+) -> tuple[float, float, float, float]:
+    first_mm = pixel_to_mm(calibration, focus_line_px[0])
+    second_mm = pixel_to_mm(calibration, focus_line_px[1])
+    midpoint = Point(
+        (first_mm.x_mm + second_mm.x_mm) / 2.0,
+        (first_mm.y_mm + second_mm.y_mm) / 2.0,
+    )
+    line = LineString(
+        [
+            (first_mm.x_mm, first_mm.y_mm),
+            (second_mm.x_mm, second_mm.y_mm),
+        ]
+    )
+    polygon = _candidate_polygon(candidate)
+    if polygon is None:
+        return (1.0, 0.0, float("inf"), candidate.area_mm2)
+    midpoint_distance = float(polygon.distance(midpoint))
+    overlap_length = float(polygon.intersection(line).length)
+    contains_midpoint = 0.0 if polygon.buffer(1e-9).covers(midpoint) else 1.0
+    # Prefer a contour containing the line midpoint, then one that follows more of
+    # the calibration line, then the closest/smaller contour. This keeps a compact
+    # tool ahead of a larger ruler/caliper fixture when both are visible.
+    return (
+        contains_midpoint,
+        -overlap_length,
+        midpoint_distance,
+        candidate.area_mm2,
+    )
+
+
+def _overlap_fraction(first: TraceCandidate, second: TraceCandidate) -> float:
+    first_polygon = _candidate_polygon(first)
+    second_polygon = _candidate_polygon(second)
+    if first_polygon is None or second_polygon is None:
+        return 0.0
+    smaller = min(float(first_polygon.area), float(second_polygon.area))
+    if smaller <= 1e-9:
+        return 0.0
+    return float(first_polygon.intersection(second_polygon).area) / smaller
+
+
 class OpenCVTracer:
     def trace(
         self,
         image: LoadedImage,
         calibration: CalibrationRecord,
         config: TraceConfig = TraceConfig(),
+        *,
+        focus_line_px: tuple[PixelPoint, PixelPoint] | None = None,
     ) -> list[TraceCandidate]:
         if config.min_area_mm2 <= 0:
             raise ValueError("min_area_mm2 must be positive")
@@ -163,61 +373,31 @@ class OpenCVTracer:
         if calibration.capture_id != image.asset.id:
             raise ValueError("Calibration does not belong to this capture")
 
-        gray = cv2.cvtColor(image.pixels_bgr, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        _, binary = cv2.threshold(
-            blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )
-        _, inverse = cv2.threshold(
-            blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
-        )
-        mask = _select_foreground_mask(binary, inverse)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+        global_mask = _global_foreground_mask(image.pixels_bgr)
+        global_candidates = _candidates_from_mask(global_mask, calibration, config)
+        if focus_line_px is None:
+            return global_candidates
 
-        contours, _ = cv2.findContours(
-            mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-        height, width = mask.shape[:2]
-        candidates: list[TraceCandidate] = []
-        for contour in contours:
-            pixel_vertices = contour.reshape(-1, 2)
-            if len(pixel_vertices) < 3:
-                continue
-            mm_points = [
-                pixel_to_mm(
-                    calibration,
-                    PixelPoint(float(vertex[0]), float(vertex[1])),
-                )
-                for vertex in pixel_vertices
-            ]
-            simplified = _simplify_closed(mm_points, config.simplify_mm)
-            components = _valid_contour_components(simplified)
-            if not components:
-                components = _valid_contour_components(mm_points)
-            touches_border = any(
-                int(vertex[0]) <= 0
-                or int(vertex[1]) <= 0
-                or int(vertex[0]) >= width - 1
-                or int(vertex[1]) >= height - 1
-                for vertex in pixel_vertices
+        focused_mask = _focus_line_mask(image.pixels_bgr, focus_line_px)
+        if focused_mask is None:
+            return global_candidates
+        focused_candidates = _candidates_from_mask(focused_mask, calibration, config)
+        if not focused_candidates:
+            return global_candidates
+
+        focused_candidates.sort(
+            key=lambda candidate: _focus_sort_key(
+                candidate, calibration, focus_line_px
             )
-            for repaired_contour, area_mm2 in components:
-                if area_mm2 < config.min_area_mm2:
-                    continue
-                confidence = 1.0
-                if touches_border:
-                    confidence -= 0.35
-                if len(repaired_contour) < 4:
-                    confidence -= 0.15
-                confidence = max(0.0, min(1.0, confidence))
-                candidates.append(
-                    TraceCandidate(
-                        base_contour_mm=repaired_contour,
-                        confidence=confidence,
-                        area_mm2=area_mm2,
-                    )
-                )
-        candidates.sort(key=lambda candidate: candidate.area_mm2, reverse=True)
-        return candidates
+        )
+        primary = focused_candidates[0]
+        ordered: list[TraceCandidate] = [primary]
+
+        # Keep genuinely separate global candidates for multi-tool photos, but do
+        # not duplicate the focused object merely because the two segmenters found
+        # slightly different versions of the same silhouette.
+        for candidate in global_candidates:
+            if _overlap_fraction(primary, candidate) >= 0.75:
+                continue
+            ordered.append(candidate)
+        return ordered
