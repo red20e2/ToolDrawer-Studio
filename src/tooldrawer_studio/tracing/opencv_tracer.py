@@ -231,6 +231,93 @@ def _known_distance_focus_line(
     return PixelPoint(*first), PixelPoint(*second)
 
 
+def _focus_color_mask(
+    pixels_bgr: np.ndarray,
+    focus_line_px: tuple[PixelPoint, PixelPoint],
+) -> np.ndarray | None:
+    first, second = focus_line_px
+    line_length = hypot(
+        float(second.x_px - first.x_px),
+        float(second.y_px - first.y_px),
+    )
+    height, width = pixels_bgr.shape[:2]
+    half_width = int(
+        round(max(12.0, min(0.24 * line_length, 0.35 * min(width, height))))
+    )
+    corridor = np.zeros((height, width), dtype=np.uint8)
+    first_xy = (int(round(first.x_px)), int(round(first.y_px)))
+    second_xy = (int(round(second.x_px)), int(round(second.y_px)))
+    cv2.line(
+        corridor,
+        first_xy,
+        second_xy,
+        255,
+        thickness=max(3, half_width * 2),
+        lineType=cv2.LINE_AA,
+    )
+    cv2.circle(corridor, first_xy, half_width, 255, -1)
+    cv2.circle(corridor, second_xy, half_width, 255, -1)
+
+    saturation = cv2.cvtColor(pixels_bgr, cv2.COLOR_BGR2HSV)[:, :, 1]
+    corridor_saturation = saturation[corridor != 0]
+    if corridor_saturation.size == 0:
+        return None
+    otsu_threshold, _ = cv2.threshold(
+        corridor_saturation.reshape(-1, 1),
+        0,
+        255,
+        cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+    )
+    saturation_threshold = max(40, int(round(float(otsu_threshold))))
+    color_seed = np.where(
+        (corridor != 0) & (saturation >= saturation_threshold),
+        255,
+        0,
+    ).astype(np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    color_seed = cv2.morphologyEx(color_seed, cv2.MORPH_OPEN, kernel)
+    if int(np.count_nonzero(color_seed)) < 20:
+        return None
+
+    grabcut_mask = np.full((height, width), cv2.GC_BGD, dtype=np.uint8)
+    grabcut_mask[corridor != 0] = cv2.GC_PR_BGD
+    probable_foreground = cv2.dilate(
+        color_seed,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
+        iterations=1,
+    )
+    grabcut_mask[probable_foreground != 0] = cv2.GC_PR_FGD
+    grabcut_mask[color_seed != 0] = cv2.GC_FGD
+
+    try:
+        cv2.grabCut(
+            pixels_bgr,
+            grabcut_mask,
+            None,
+            np.zeros((1, 65), np.float64),
+            np.zeros((1, 65), np.float64),
+            5,
+            cv2.GC_INIT_WITH_MASK,
+        )
+    except cv2.error:
+        return None
+
+    foreground = np.where(
+        (grabcut_mask == cv2.GC_FGD) | (grabcut_mask == cv2.GC_PR_FGD),
+        255,
+        0,
+    ).astype(np.uint8)
+    if int(np.count_nonzero(foreground)) < 20:
+        return None
+    foreground = cv2.morphologyEx(
+        foreground, cv2.MORPH_CLOSE, kernel, iterations=1
+    )
+    foreground = cv2.morphologyEx(
+        foreground, cv2.MORPH_OPEN, kernel, iterations=1
+    )
+    return foreground
+
+
 def _focus_line_mask(
     pixels_bgr: np.ndarray,
     focus_line_px: tuple[PixelPoint, PixelPoint],
@@ -257,6 +344,10 @@ def _focus_line_mask(
         or min(ay, by) >= height
     ):
         return None
+
+    color_mask = _focus_color_mask(pixels_bgr, focus_line_px)
+    if color_mask is not None:
+        return color_mask
 
     half_width = int(
         round(max(8.0, min(0.09 * line_length, 0.22 * min(width, height))))
