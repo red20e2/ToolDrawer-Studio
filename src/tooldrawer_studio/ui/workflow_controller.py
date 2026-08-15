@@ -98,6 +98,9 @@ class WorkflowController:
         self._loaded_images: dict[str, LoadedImage] = {}
         self._active_capture_id: str | None = None
         self._active_calibration: CalibrationRecord | None = None
+        self._trace_focus_line_px_by_capture: dict[
+            str, tuple[PixelPoint, PixelPoint]
+        ] = {}
         self._selected_tool_id: str | None = None
         self._pocket_spec: PocketSpec | None = None
         self._generation_result: GenerationResult | None = None
@@ -224,9 +227,11 @@ class WorkflowController:
         known_distance_mm: float,
     ) -> CalibrationRecord:
         capture_id = self._require_active_capture_id()
-        return self._store_active_calibration(
+        record = self._store_active_calibration(
             solve_known_distance(capture_id, pixel_a, pixel_b, known_distance_mm)
         )
+        self._trace_focus_line_px_by_capture[capture_id] = (pixel_a, pixel_b)
+        return record
 
     def calibrate_paper(
         self,
@@ -234,9 +239,11 @@ class WorkflowController:
         preset: PaperPreset,
     ) -> CalibrationRecord:
         capture_id = self._require_active_capture_id()
-        return self._store_active_calibration(
+        record = self._store_active_calibration(
             solve_paper(capture_id, corners_px, preset)
         )
+        self._trace_focus_line_px_by_capture.pop(capture_id, None)
+        return record
 
     def calibrate_known_object(
         self,
@@ -245,14 +252,18 @@ class WorkflowController:
         height_mm: float,
     ) -> CalibrationRecord:
         capture_id = self._require_active_capture_id()
-        return self._store_active_calibration(
+        record = self._store_active_calibration(
             solve_known_object(capture_id, corners_px, width_mm, height_mm)
         )
+        self._trace_focus_line_px_by_capture.pop(capture_id, None)
+        return record
 
     def calibrate_target(self, spec: CalibrationTargetSpec) -> CalibrationRecord:
         capture_id = self._require_active_capture_id()
         image = self._require_active_image()
-        return self._store_active_calibration(solve_target(capture_id, image, spec))
+        record = self._store_active_calibration(solve_target(capture_id, image, spec))
+        self._trace_focus_line_px_by_capture.pop(capture_id, None)
+        return record
 
     def trace_tools(
         self, *, allow_low_confidence: bool = False
@@ -271,7 +282,12 @@ class WorkflowController:
         if image is None:
             raise ValueError("The active source image is not decoded")
         candidates = OpenCVTracer().trace(
-            image, self._active_calibration, TraceConfig()
+            image,
+            self._active_calibration,
+            TraceConfig(),
+            focus_line_px=self._trace_focus_line_px_by_capture.get(
+                self._active_capture_id
+            ),
         )
         retained = [
             tool
