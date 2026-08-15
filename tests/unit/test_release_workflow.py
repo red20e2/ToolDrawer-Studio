@@ -18,8 +18,10 @@ def test_tagged_release_workflow_contract():
     assert "packaging/build_artifacts.ps1" in workflow
     assert "gh release create" in workflow
     assert "--prerelease" in workflow
-    assert "ToolDrawer-Studio-0.1.0-Setup.exe" in workflow
-    assert "ToolDrawer-Studio-0.1.0-Portable.zip" in workflow
+    assert '$appVersion = "${{ github.ref_name }}".TrimStart("v")' in workflow
+    assert "ToolDrawer-Studio-$appVersion-Setup.exe" in workflow
+    assert "ToolDrawer-Studio-$appVersion-Portable.zip" in workflow
+    assert "docs/V0.1.1_RELEASE_NOTES.md" in workflow
     assert "SHA256SUMS.txt" in workflow
 
 

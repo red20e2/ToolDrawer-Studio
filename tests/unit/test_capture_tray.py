@@ -97,3 +97,26 @@ def test_delete_removes_only_selected_item():
     assert first.id != second.id
     widget.close()
     assert app is not None
+
+
+def test_compact_capture_tray_fits_sidebar_and_can_collapse():
+    app = QApplication.instance() or QApplication([])
+    module = _ui_module()
+    service = CaptureSessionService()
+    service.add_bytes("phone", _png_bytes(), "phone.png")
+
+    widget = module.CaptureTrayWidget(service, compact=True)
+    widget.resize(320, 300)
+    widget.show()
+    app.processEvents()
+
+    assert widget.compact is True
+    assert widget.list_widget.maximumHeight() <= 120
+    assert widget.preview_label.maximumHeight() <= 140
+    assert widget.body_widget.isVisible() is True
+
+    widget.set_collapsed(True)
+    assert widget.body_widget.isVisible() is False
+    widget.set_collapsed(False)
+    assert widget.body_widget.isVisible() is True
+    widget.close()

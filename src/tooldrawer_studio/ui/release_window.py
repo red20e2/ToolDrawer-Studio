@@ -1,28 +1,78 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QProgressBar
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QProgressBar
 
 from tooldrawer_studio.preferences import Preferences
 from tooldrawer_studio.project_state import ProjectEditTracker
 from tooldrawer_studio.ui.busy_scope import busy_ui
-from tooldrawer_studio.ui.main_window import MainWindow
+from tooldrawer_studio.ui.calibration_main_window import CalibrationMainWindow
 from tooldrawer_studio.ui.workflow_controller import WorkflowController
 
 
-class ReleaseMainWindow(MainWindow):
+_LOGGER = logging.getLogger(__name__)
+
+
+class ReleaseMainWindow(CalibrationMainWindow):
     """Production shell for release-only persistence and safety behavior."""
 
     def __init__(self) -> None:
         super().__init__()
         self.preferences = Preferences.load()
+        self._restore_window_state()
         self.project_edit_tracker = ProjectEditTracker(self.controller.project)
         self.operation_progress = QProgressBar(self)
         self.operation_progress.setVisible(False)
         self.operation_progress.setTextVisible(True)
         self.operation_progress.setMinimumWidth(220)
         self.statusBar().addPermanentWidget(self.operation_progress)
+
+    def _restore_window_state(self) -> None:
+        values = (
+            self.preferences.window_x,
+            self.preferences.window_y,
+            self.preferences.window_width,
+            self.preferences.window_height,
+        )
+        if all(value is not None for value in values):
+            x, y, width, height = values
+            saved = QRect(
+                int(x),  # type: ignore[arg-type]
+                int(y),  # type: ignore[arg-type]
+                max(self.minimumWidth(), int(width)),  # type: ignore[arg-type]
+                max(self.minimumHeight(), int(height)),  # type: ignore[arg-type]
+            )
+            screens = QApplication.screens()
+            if screens and not any(
+                saved.intersects(screen.availableGeometry()) for screen in screens
+            ):
+                primary = QApplication.primaryScreen()
+                if primary is not None:
+                    saved.moveCenter(primary.availableGeometry().center())
+            self.setGeometry(saved)
+        if self.preferences.window_maximized:
+            self.setWindowState(
+                self.windowState() | Qt.WindowState.WindowMaximized
+            )
+
+    def _save_window_state(self) -> None:
+        maximized = self.isMaximized() or (
+            self.isFullScreen() and self._was_maximized_before_fullscreen
+        )
+        geometry = self.normalGeometry() if (maximized or self.isFullScreen()) else self.geometry()
+        width = max(self.minimumWidth(), geometry.width())
+        height = max(self.minimumHeight(), geometry.height())
+        self.preferences.set_window_geometry(
+            geometry.x(),
+            geometry.y(),
+            width,
+            height,
+            maximized=maximized,
+        )
+        self.preferences.save()
 
     def _dialog_directory(self, kind: str) -> str:
         values = {
@@ -138,6 +188,7 @@ class ReleaseMainWindow(MainWindow):
                 self._update_calibration_status(calibration)
             else:
                 self.calibration_status.setText("Calibration: not set")
+                self.calibration_sidebar.set_calibration_status("Calibration: not set")
                 self.low_confidence_override.setChecked(False)
                 self.low_confidence_override.setVisible(False)
                 self.tabs.setTabEnabled(1, bool(self.controller.project.tools))
@@ -188,4 +239,9 @@ class ReleaseMainWindow(MainWindow):
         if self.isVisible() and not self._confirm_discard_unsaved():
             event.ignore()
             return
-        super().closeEvent(event)
+        try:
+            self._save_window_state()
+        except Exception:
+            _LOGGER.exception("Could not save window state during shutdown")
+        finally:
+            super().closeEvent(event)

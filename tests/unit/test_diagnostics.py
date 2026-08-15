@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from tooldrawer_studio.version import __version__
+
 
 def _diagnostics_api():
     try:
@@ -34,7 +36,7 @@ def test_diagnostics_write_release_context_and_traceback(monkeypatch, tmp_path: 
 
     text = path.read_text(encoding="utf-8")
     assert path == tmp_path / "ToolDrawer Studio" / "logs" / "tooldrawer-studio.log"
-    assert "app_version=0.1.0" in text
+    assert f"app_version={__version__}" in text
     assert "platform=" in text
     assert "context=generate-organizer" in text
     assert "ValueError: fixture failure" in text

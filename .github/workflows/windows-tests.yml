@@ -54,9 +54,11 @@ jobs:
       - name: Inspect release artifacts
         shell: pwsh
         run: |
+          $AppVersion = (python -c "from tooldrawer_studio.version import __version__; print(__version__)").Trim()
+          if ([string]::IsNullOrWhiteSpace($AppVersion)) { throw "Application version is empty" }
           $Expected = @(
-            "artifacts/ToolDrawer-Studio-0.1.0-Setup.exe",
-            "artifacts/ToolDrawer-Studio-0.1.0-Portable.zip",
+            "artifacts/ToolDrawer-Studio-$AppVersion-Setup.exe",
+            "artifacts/ToolDrawer-Studio-$AppVersion-Portable.zip",
             "artifacts/SHA256SUMS.txt"
           )
           foreach ($Path in $Expected) {
@@ -68,9 +70,21 @@ jobs:
           Write-Host "sha256-manifest-begin"
           Get-Content artifacts/SHA256SUMS.txt
           Write-Host "sha256-manifest-end"
-      - name: Upload Windows release artifacts
+      - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: ToolDrawer-Studio-0.1.0-Windows
-          path: artifacts/
+          name: ToolDrawer-Studio-PR-${{ github.event.pull_request.number }}-Installer
+          path: artifacts/ToolDrawer-Studio-*-Setup.exe
+          if-no-files-found: error
+      - name: Upload Windows portable build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ToolDrawer-Studio-PR-${{ github.event.pull_request.number }}-Portable
+          path: artifacts/ToolDrawer-Studio-*-Portable.zip
+          if-no-files-found: error
+      - name: Upload checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: ToolDrawer-Studio-PR-${{ github.event.pull_request.number }}-Checksums
+          path: artifacts/SHA256SUMS.txt
           if-no-files-found: error

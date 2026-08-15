@@ -35,12 +35,12 @@ jobs:
       # packaging/verify_frozen.ps1 before producing the distributable files.
       - name: Build and verify release artifacts
         shell: pwsh
-        run: ./packaging/build_artifacts.ps1 -AppVersion 0.1.0
+        run: ./packaging/build_artifacts.ps1
 
       - name: Stage release payload
         uses: actions/upload-artifact@v4
         with:
-          name: ToolDrawer-Studio-0.1.0-Release
+          name: ToolDrawer-Studio-${{ github.ref_name }}-Release
           path: artifacts/
           if-no-files-found: error
 
@@ -56,7 +56,7 @@ jobs:
       - name: Download verified release payload
         uses: actions/download-artifact@v4
         with:
-          name: ToolDrawer-Studio-0.1.0-Release
+          name: ToolDrawer-Studio-${{ github.ref_name }}-Release
           path: artifacts
 
       - name: Publish GitHub pre-release
@@ -64,10 +64,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $appVersion = "${{ github.ref_name }}".TrimStart("v")
+          $setup = "artifacts/ToolDrawer-Studio-$appVersion-Setup.exe"
+          $portable = "artifacts/ToolDrawer-Studio-$appVersion-Portable.zip"
+
           gh release create "${{ github.ref_name }}" `
-            "artifacts/ToolDrawer-Studio-0.1.0-Setup.exe" `
-            "artifacts/ToolDrawer-Studio-0.1.0-Portable.zip" `
+            $setup `
+            $portable `
             "artifacts/SHA256SUMS.txt" `
-            --title "ToolDrawer Studio 0.1.0" `
-            --notes-file "docs/V0.1_RELEASE_NOTES.md" `
+            --title "ToolDrawer Studio $appVersion" `
+            --notes-file "docs/V0.1.1_RELEASE_NOTES.md" `
             --prerelease
