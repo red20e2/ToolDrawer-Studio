@@ -5,7 +5,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import cv2
 import numpy as np
 import pytest
-from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
+from PySide6.QtGui import QFocusEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QGraphicsEllipseItem, QGraphicsLineItem
 
@@ -189,6 +190,32 @@ def test_middle_mouse_drag_pans_actual_size_image():
         before_y,
     )
     assert view.is_fit_mode() is False
+    view.close()
+
+
+def test_focus_loss_clears_space_pan_state_before_next_click():
+    app = _app()
+    view = CalibrationImageView()
+    view.resize(700, 500)
+    view.set_image_bytes(_image_bytes())
+    view.set_required_points(2)
+    view.show()
+    view.setFocus()
+    app.processEvents()
+
+    QTest.keyPress(view, Qt.Key.Key_Space)
+    assert view.cursor().shape() == Qt.CursorShape.OpenHandCursor
+
+    QApplication.sendEvent(
+        view,
+        QFocusEvent(QEvent.Type.FocusOut, Qt.FocusReason.OtherFocusReason),
+    )
+    target = view.mapFromScene(QPointF(500.0, 250.0))
+    QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=target)
+    app.processEvents()
+
+    assert view.cursor().shape() == Qt.CursorShape.CrossCursor
+    assert len(view.points_px()) == 1
     view.close()
 
 

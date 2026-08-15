@@ -1,14 +1,22 @@
 from pathlib import Path
+import gc
+import weakref
 
 import cv2
 import numpy as np
+import pytest
 from shapely.geometry import Point, Polygon
 
 from tooldrawer_studio.calibration.service import PixelPoint, calibrate_known_distance
 from tooldrawer_studio.capture.image_loader import load_image
 from tooldrawer_studio.geometry.contour import validate_contour
 from tooldrawer_studio.tracing.models import TraceConfig
-from tooldrawer_studio.tracing.opencv_tracer import OpenCVTracer, _focus_color_mask
+from tooldrawer_studio.tracing import opencv_tracer
+from tooldrawer_studio.tracing.opencv_tracer import (
+    OpenCVTracer,
+    _focus_color_mask,
+    _focus_line_mask,
+)
 
 
 _FOCUSED_PEN_LINE = (PixelPoint(105.0, 170.0), PixelPoint(495.0, 170.0))
@@ -78,17 +86,20 @@ def _trace_focused_pen(
 def _candidate_polygon_and_mask(
     candidate,
     focus_line: tuple[PixelPoint, PixelPoint] = _FOCUSED_PEN_LINE,
+    *,
+    mask_shape: tuple[int, int] = (360, 600),
+    pixels_per_mm: float = 1.0,
 ) -> tuple[Polygon, np.ndarray]:
     validate_contour(candidate.base_contour_mm)
     polygon = Polygon(
         [(point.x_mm, point.y_mm) for point in candidate.base_contour_mm]
     )
-    candidate_mask = np.zeros((360, 600), dtype=np.uint8)
+    candidate_mask = np.zeros(mask_shape, dtype=np.uint8)
     pixel_vertices = np.asarray(
         [
             [
-                round(point.x_mm + focus_line[0].x_px),
-                round(point.y_mm + focus_line[0].y_px),
+                round(point.x_mm * pixels_per_mm + focus_line[0].x_px),
+                round(point.y_mm * pixels_per_mm + focus_line[0].y_px),
             ]
             for point in candidate.base_contour_mm
         ],
@@ -235,6 +246,111 @@ def test_focus_line_returns_six_saturation_blue_pen_without_corridor_fallback(
     assert not polygon.covers(Point(195.0, 0.0))
 
 
+def test_focus_line_rejects_two_saturation_detached_shadow_cast(
+    tmp_path: Path,
+):
+    focus_line = (PixelPoint(105.0, 255.0), PixelPoint(495.0, 255.0))
+    pixels, pen_mask = _focused_pen_fixture(
+        (186, 183, 182),
+        include_caliper=False,
+        include_shadow=False,
+        neutral_reference=True,
+    )
+    # The weak paper cast is closer to the calibration segment than the pen, but
+    # it has only an 8-level local value change and is not object foreground.
+    cv2.rectangle(pixels, (95, 245), (505, 265), (226, 228, 228), -1)
+
+    first = _trace_focused_pen(
+        tmp_path,
+        pixels,
+        "six-saturation-pen-with-two-saturation-shadow.png",
+        focus_line,
+    )
+    polygon, candidate_mask = _candidate_polygon_and_mask(first, focus_line)
+
+    assert polygon.is_valid
+    assert _mask_iou(candidate_mask, pen_mask) >= 0.94
+    assert not polygon.covers(Point(195.0, 0.0))  # detached cast midpoint
+
+
+def test_focus_line_preserves_pen_silhouette_at_phone_photo_resolution(
+    tmp_path: Path,
+):
+    scale = 10
+    base_pixels, base_pen_mask = _focused_pen_fixture((168, 72, 24))
+    pixels = cv2.resize(
+        base_pixels,
+        (base_pixels.shape[1] * scale, base_pixels.shape[0] * scale),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    pen_mask = cv2.resize(
+        base_pen_mask,
+        (base_pen_mask.shape[1] * scale, base_pen_mask.shape[0] * scale),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    focus_line = tuple(
+        PixelPoint(point.x_px * scale, point.y_px * scale)
+        for point in _FOCUSED_PEN_LINE
+    )
+    first = _trace_focused_pen(
+        tmp_path,
+        pixels,
+        "phone-resolution-focused-pen.png",
+        focus_line,
+    )
+    polygon, candidate_mask = _candidate_polygon_and_mask(
+        first,
+        focus_line,
+        mask_shape=pen_mask.shape,
+        pixels_per_mm=float(scale),
+    )
+
+    assert polygon.is_valid
+    assert _mask_iou(candidate_mask, pen_mask) >= 0.94
+    assert polygon.bounds[3] == pytest.approx(61.0, abs=1.0)
+
+
+def test_focus_color_mask_declines_tied_low_chroma_components():
+    pixels = np.full((300, 600, 3), 236, dtype=np.uint8)
+    low_chroma = (186, 183, 182)
+    cv2.rectangle(pixels, (95, 105), (505, 125), low_chroma, -1)
+    cv2.rectangle(pixels, (95, 175), (505, 195), low_chroma, -1)
+    focus_line = (PixelPoint(105.0, 150.0), PixelPoint(495.0, 150.0))
+
+    color_mask, color_attempted = _focus_color_mask(pixels, focus_line)
+
+    assert color_attempted is True
+    assert color_mask is None
+
+
+def test_focus_color_mask_declines_near_tied_low_chroma_components():
+    pixels = np.full((300, 600, 3), 236, dtype=np.uint8)
+    low_chroma = (186, 183, 182)
+    cv2.rectangle(pixels, (95, 105), (505, 125), low_chroma, -1)
+    cv2.rectangle(pixels, (94, 175), (505, 195), low_chroma, -1)
+    focus_line = (PixelPoint(105.0, 150.0), PixelPoint(495.0, 150.0))
+
+    color_mask, color_attempted = _focus_color_mask(pixels, focus_line)
+
+    assert color_attempted is True
+    assert color_mask is None
+
+
+def test_focus_color_mask_selects_materially_closer_low_chroma_component():
+    pixels = np.full((300, 600, 3), 236, dtype=np.uint8)
+    low_chroma = (186, 183, 182)
+    cv2.rectangle(pixels, (95, 115), (505, 135), low_chroma, -1)
+    cv2.rectangle(pixels, (95, 190), (505, 210), low_chroma, -1)
+    focus_line = (PixelPoint(105.0, 150.0), PixelPoint(495.0, 150.0))
+
+    color_mask, color_attempted = _focus_color_mask(pixels, focus_line)
+
+    assert color_attempted is True
+    assert color_mask is not None
+    assert color_mask[125, 300] != 0
+    assert color_mask[200, 300] == 0
+
+
 def test_focus_line_ignores_saturated_fleck_inside_six_saturation_pen(
     tmp_path: Path,
 ):
@@ -338,6 +454,83 @@ def test_focus_color_component_analysis_scans_only_local_bounds(monkeypatch):
     assert scanned_sizes
     assert max(scanned_sizes) <= 36
     assert sum(scanned_sizes) <= 128 * 36
+
+
+def test_focused_mask_caps_expensive_processing_to_single_two_megapixel_roi(
+    monkeypatch,
+):
+    pixels = np.full((2000, 3000, 3), 236, dtype=np.uint8)
+    cv2.rectangle(pixels, (400, 960), (2600, 1040), (168, 72, 24), -1)
+    focus_line = (PixelPoint(350.0, 1000.0), PixelPoint(2650.0, 1000.0))
+    hsv_pixels: list[int] = []
+    component_pixels: list[int] = []
+    grabcut_pixels: list[int] = []
+    original_cvt_color = cv2.cvtColor
+    original_components = cv2.connectedComponentsWithStats
+
+    def record_cvt_color(image, code, *args, **kwargs):
+        if code == cv2.COLOR_BGR2HSV:
+            hsv_pixels.append(int(image.shape[0] * image.shape[1]))
+        return original_cvt_color(image, code, *args, **kwargs)
+
+    def record_components(image, *args, **kwargs):
+        component_pixels.append(int(image.shape[0] * image.shape[1]))
+        return original_components(image, *args, **kwargs)
+
+    def record_grabcut(image, mask, *_args, **_kwargs):
+        grabcut_pixels.append(int(image.shape[0] * image.shape[1]))
+
+    monkeypatch.setattr(cv2, "cvtColor", record_cvt_color)
+    monkeypatch.setattr(cv2, "connectedComponentsWithStats", record_components)
+    monkeypatch.setattr(cv2, "grabCut", record_grabcut)
+
+    assert _focus_line_mask(pixels, focus_line) is not None
+
+    assert len(hsv_pixels) == 1
+    assert hsv_pixels[0] <= 2_000_000
+    assert component_pixels and max(component_pixels) <= 2_000_000
+    assert grabcut_pixels and max(grabcut_pixels) <= 2_000_000
+
+
+def test_focused_trace_releases_global_mask_before_grabcut(
+    tmp_path: Path,
+    monkeypatch,
+):
+    pixels, _pen_mask = _focused_pen_fixture(
+        (168, 72, 24), include_caliper=False, include_shadow=False
+    )
+    path = tmp_path / "focused-global-mask-lifetime.png"
+    assert cv2.imwrite(str(path), pixels)
+    image = load_image(path, "capture-1")
+    calibration = calibrate_known_distance(
+        "capture-1", _FOCUSED_PEN_LINE[0], _FOCUSED_PEN_LINE[1], 390.0
+    )
+    global_mask_ref: weakref.ReferenceType[np.ndarray] | None = None
+    released_before_grabcut: list[bool] = []
+
+    def tracked_global_mask(source_pixels):
+        nonlocal global_mask_ref
+        mask = np.zeros(source_pixels.shape[:2], dtype=np.uint8)
+        global_mask_ref = weakref.ref(mask)
+        return mask
+
+    def observe_grabcut(*_args, **_kwargs):
+        gc.collect()
+        released_before_grabcut.append(
+            global_mask_ref is not None and global_mask_ref() is None
+        )
+
+    monkeypatch.setattr(opencv_tracer, "_global_foreground_mask", tracked_global_mask)
+    monkeypatch.setattr(cv2, "grabCut", observe_grabcut)
+
+    OpenCVTracer().trace(
+        image,
+        calibration,
+        TraceConfig(min_area_mm2=100.0, simplify_mm=0.5),
+        focus_line_px=_FOCUSED_PEN_LINE,
+    )
+
+    assert released_before_grabcut == [True]
 
 
 def test_failed_color_segmentation_does_not_retry_corridor_seed(

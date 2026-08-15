@@ -5,6 +5,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication
 
 from tooldrawer_studio.__main__ import build_main_window
@@ -95,3 +96,48 @@ def test_release_window_saves_last_normal_geometry_on_close(monkeypatch, tmp_pat
     assert saved.window_width == 1450
     assert saved.window_height == 880
     assert saved.window_maximized is False
+
+
+def test_release_window_cleans_up_when_window_state_save_fails(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    app = QApplication.instance() or QApplication([])
+    window = build_main_window()
+
+    class PhoneServer:
+        stopped = False
+
+        def stop(self) -> None:
+            self.stopped = True
+
+    class WebcamService:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    phone_server = PhoneServer()
+    webcam_service = WebcamService()
+    window.phone_server = phone_server
+    window.webcam_service = webcam_service
+    window.webcam_panel = None
+    window.show()
+    app.processEvents()
+    event = QCloseEvent()
+    monkeypatch.setattr(window, "_confirm_discard_unsaved", lambda: True)
+
+    def fail_save(_preferences) -> None:
+        raise OSError("preferences directory is read-only")
+
+    monkeypatch.setattr(Preferences, "save", fail_save)
+    try:
+        window.closeEvent(event)
+
+        assert event.isAccepted()
+        assert phone_server.stopped is True
+        assert webcam_service.closed is True
+    finally:
+        monkeypatch.setattr(Preferences, "save", lambda _preferences: None)
+        window.close()

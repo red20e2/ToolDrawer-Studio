@@ -4,6 +4,7 @@ from PySide6.QtCore import QPoint, QPointF, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
+    QFocusEvent,
     QKeyEvent,
     QMouseEvent,
     QPen,
@@ -245,6 +246,14 @@ class CalibrationImageView(QGraphicsView):
             event.accept()
             return
         super().keyReleaseEvent(event)
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:
+        self._space_down = False
+        self._panning = False
+        self._dragging_point = False
+        self._pan_start = QPoint()
+        super().focusOutEvent(event)
+        self._restore_interaction_cursor()
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         if not self._pixmap_item.pixmap().isNull():

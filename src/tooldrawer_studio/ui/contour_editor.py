@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import weakref
+
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QPainterPath, QPen, QPixmap, QTransform, QUndoCommand, QUndoStack
 from PySide6.QtWidgets import (
@@ -69,6 +71,8 @@ class ContourEditor(QWidget):
         self._contour: list[Point2D] = []
         self._base_contour: list[Point2D] = []
         self._source_pixmap: QPixmap | None = None
+        self._source_pixmap_capture_id: str | None = None
+        self._source_pixmap_controller_ref: weakref.ReferenceType[object] | None = None
         self._calibration: CalibrationRecord | None = None
         self.undo_stack = QUndoStack(self)
         self.scene = QGraphicsScene(self)
@@ -88,15 +92,45 @@ class ContourEditor(QWidget):
         self._contour = list(tool.contour_mm)
         validate_contour(self._base_contour)
         validate_contour(self._contour)
-        image_bytes, calibration = self._resolve_source_context(
-            tool, image_bytes, calibration
+        source_controller = getattr(self.window(), "controller", None)
+        cached_controller = (
+            self._source_pixmap_controller_ref()
+            if self._source_pixmap_controller_ref is not None
+            else None
         )
-        self._source_pixmap = None
-        if image_bytes is not None:
-            pixmap = QPixmap()
-            if not pixmap.loadFromData(image_bytes):
-                raise ValueError("Could not decode the source image for contour editing")
-            self._source_pixmap = pixmap
+        same_source_controller = (
+            source_controller is None
+            and self._source_pixmap_controller_ref is None
+        ) or (
+            cached_controller is not None
+            and cached_controller is source_controller
+        )
+        reuse_source_pixmap = (
+            image_bytes is None
+            and self._source_pixmap is not None
+            and self._source_pixmap_capture_id == tool.source_capture_id
+            and same_source_controller
+        )
+        image_bytes, calibration = self._resolve_source_context(
+            tool,
+            image_bytes,
+            calibration,
+            resolve_image=not reuse_source_pixmap,
+        )
+        if not reuse_source_pixmap:
+            self._source_pixmap = None
+            self._source_pixmap_capture_id = None
+            self._source_pixmap_controller_ref = None
+            if image_bytes is not None:
+                pixmap = QPixmap()
+                if not pixmap.loadFromData(image_bytes):
+                    raise ValueError(
+                        "Could not decode the source image for contour editing"
+                    )
+                self._source_pixmap = pixmap
+                self._source_pixmap_capture_id = tool.source_capture_id
+                if source_controller is not None:
+                    self._source_pixmap_controller_ref = weakref.ref(source_controller)
         self._calibration = calibration
         self.undo_stack.clear()
         self._redraw()
@@ -107,6 +141,8 @@ class ContourEditor(QWidget):
         tool: ToolObject,
         image_bytes: bytes | None,
         calibration: CalibrationRecord | None,
+        *,
+        resolve_image: bool = True,
     ) -> tuple[bytes | None, CalibrationRecord | None]:
         if image_bytes is not None and calibration is not None:
             return image_bytes, calibration
@@ -114,7 +150,7 @@ class ContourEditor(QWidget):
         controller = getattr(host, "controller", None)
         if controller is None:
             return image_bytes, calibration
-        if image_bytes is None:
+        if image_bytes is None and resolve_image:
             try:
                 image_bytes = controller.capture_display_bytes(tool.source_capture_id)
             except (KeyError, ValueError):

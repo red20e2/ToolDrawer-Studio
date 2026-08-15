@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from PySide6.QtCore import QRect, Qt
@@ -10,6 +11,9 @@ from tooldrawer_studio.project_state import ProjectEditTracker
 from tooldrawer_studio.ui.busy_scope import busy_ui
 from tooldrawer_studio.ui.calibration_main_window import CalibrationMainWindow
 from tooldrawer_studio.ui.workflow_controller import WorkflowController
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ReleaseMainWindow(CalibrationMainWindow):
@@ -235,5 +239,9 @@ class ReleaseMainWindow(CalibrationMainWindow):
         if self.isVisible() and not self._confirm_discard_unsaved():
             event.ignore()
             return
-        self._save_window_state()
-        super().closeEvent(event)
+        try:
+            self._save_window_state()
+        except Exception:
+            _LOGGER.exception("Could not save window state during shutdown")
+        finally:
+            super().closeEvent(event)
