@@ -268,65 +268,104 @@ def _focus_color_mask(
         255,
         cv2.THRESH_BINARY + cv2.THRESH_OTSU,
     )
-    saturation_threshold = max(8, int(round(float(otsu_threshold))))
-    color_seed = np.where(
-        (corridor != 0) & (saturation >= saturation_threshold),
-        255,
-        0,
-    ).astype(np.uint8)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    color_seed = cv2.morphologyEx(color_seed, cv2.MORPH_OPEN, kernel)
-    color_pixel_count = int(np.count_nonzero(color_seed))
-    if color_pixel_count < 20:
-        return None, color_pixel_count > 0
-
-    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
-        color_seed
-    )
     axis_x = float(second.x_px - first.x_px) / line_length
     axis_y = float(second.y_px - first.y_px) / line_length
     hue = cv2.cvtColor(pixels_bgr, cv2.COLOR_BGR2HSV)[:, :, 0]
-    selected_label: int | None = None
-    selected_key: tuple[float, float, float, float, int] | None = None
+    otsu_value = int(round(float(otsu_threshold)))
+    thresholds = [max(8, otsu_value)]
+    low_chroma_threshold = max(1, otsu_value)
+    if low_chroma_threshold < thresholds[0]:
+        thresholds.append(low_chroma_threshold)
+    selected_mean_saturation = 0.0
+    selected_seed: np.ndarray | None = None
+    color_attempted = False
+    previous_color_seed: np.ndarray | None = None
     minimum_overlap = max(12.0, 0.15 * line_length)
-    for label in range(1, component_count):
-        area = int(stats[label, cv2.CC_STAT_AREA])
-        if area < 20:
-            continue
-        ys, xs = np.nonzero(labels == label)
-        relative_x = xs.astype(np.float64) - float(first.x_px)
-        relative_y = ys.astype(np.float64) - float(first.y_px)
-        axis_positions = relative_x * axis_x + relative_y * axis_y
-        cross_positions = -relative_x * axis_y + relative_y * axis_x
-        axis_min = float(axis_positions.min())
-        axis_max = float(axis_positions.max())
-        axis_span = axis_max - axis_min
-        cross_span = float(cross_positions.max() - cross_positions.min())
-        axis_overlap = max(
-            0.0,
-            min(axis_max, line_length) - max(axis_min, 0.0),
-        )
-        elongation = axis_span / max(cross_span, 1.0)
-        hue_angles = hue[labels == label].astype(np.float64) * (np.pi / 90.0)
-        hue_coherence = hypot(
-            float(np.cos(hue_angles).mean()),
-            float(np.sin(hue_angles).mean()),
-        )
-        if (
-            axis_overlap < minimum_overlap
-            or elongation < 2.0
-            or hue_coherence < 0.75
+    for saturation_threshold in thresholds:
+        color_seed = np.where(
+            (corridor != 0) & (saturation >= saturation_threshold),
+            255,
+            0,
+        ).astype(np.uint8)
+        color_seed = cv2.morphologyEx(color_seed, cv2.MORPH_OPEN, kernel)
+        color_pixel_count = int(np.count_nonzero(color_seed))
+        color_attempted = color_attempted or color_pixel_count > 0
+        if previous_color_seed is not None and np.array_equal(
+            color_seed, previous_color_seed
         ):
             continue
-        cross_distance = abs(float(cross_positions.mean()))
-        key = (axis_overlap, axis_span, elongation, -cross_distance, area)
-        if selected_key is None or key > selected_key:
-            selected_label = label
-            selected_key = key
-    if selected_label is None:
-        return None, True
+        previous_color_seed = color_seed
+        if color_pixel_count < 20:
+            continue
 
-    color_seed = np.where(labels == selected_label, 255, 0).astype(np.uint8)
+        component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+            color_seed
+        )
+        selected_label: int | None = None
+        selected_key: tuple[float, float, float, float, int] | None = None
+        for label in range(1, component_count):
+            area = int(stats[label, cv2.CC_STAT_AREA])
+            if area < 20:
+                continue
+            left = int(stats[label, cv2.CC_STAT_LEFT])
+            top = int(stats[label, cv2.CC_STAT_TOP])
+            component_width = int(stats[label, cv2.CC_STAT_WIDTH])
+            component_height = int(stats[label, cv2.CC_STAT_HEIGHT])
+            component_bounds = np.s_[
+                top : top + component_height,
+                left : left + component_width,
+            ]
+            component_mask = labels[component_bounds] == label
+            local_ys, local_xs = np.nonzero(component_mask)
+            ys = local_ys + top
+            xs = local_xs + left
+            relative_x = xs.astype(np.float64) - float(first.x_px)
+            relative_y = ys.astype(np.float64) - float(first.y_px)
+            axis_positions = relative_x * axis_x + relative_y * axis_y
+            cross_positions = -relative_x * axis_y + relative_y * axis_x
+            axis_min = float(axis_positions.min())
+            axis_max = float(axis_positions.max())
+            axis_span = axis_max - axis_min
+            cross_span = float(cross_positions.max() - cross_positions.min())
+            axis_overlap = max(
+                0.0,
+                min(axis_max, line_length) - max(axis_min, 0.0),
+            )
+            elongation = axis_span / max(cross_span, 1.0)
+            hue_angles = (
+                hue[component_bounds][component_mask].astype(np.float64)
+                * (np.pi / 90.0)
+            )
+            hue_coherence = hypot(
+                float(np.cos(hue_angles).mean()),
+                float(np.sin(hue_angles).mean()),
+            )
+            if (
+                axis_overlap < minimum_overlap
+                or elongation < 2.0
+                or hue_coherence < 0.75
+            ):
+                continue
+            cross_distance = abs(float(cross_positions.mean()))
+            key = (axis_overlap, -cross_distance, axis_span, elongation, area)
+            if selected_key is None or key > selected_key:
+                selected_label = label
+                selected_key = key
+                selected_mean_saturation = float(
+                    saturation[component_bounds][component_mask].mean()
+                )
+        if selected_label is not None:
+            selected_seed = np.where(labels == selected_label, 255, 0).astype(
+                np.uint8
+            )
+            break
+    if selected_seed is None:
+        return None, color_attempted
+
+    color_seed = selected_seed
+    if selected_mean_saturation <= 8.0:
+        return color_seed, True
 
     grabcut_mask = np.full((height, width), cv2.GC_BGD, dtype=np.uint8)
     grabcut_mask[corridor != 0] = cv2.GC_PR_BGD
