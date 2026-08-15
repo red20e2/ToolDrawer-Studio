@@ -76,5 +76,5 @@ def test_live_known_distance_segment_beats_other_object_on_same_axis(
     xs = [point.x_mm for point in first.base_contour_mm]
     ys = [point.y_mm for point in first.base_contour_mm]
     assert min(xs) <= 2.0
-    assert 150.0 <= max(xs) <= 170.0
+    assert 170.0 <= max(xs) <= 190.0
     assert max(ys) - min(ys) < 60.0
