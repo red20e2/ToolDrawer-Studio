@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from tooldrawer_studio.calibration.service import PixelPoint, calibrate_known_distance
-from tooldrawer_studio.measurement.models import MIN_AUTOMATIC_THICKNESS_CONFIDENCE
+from tooldrawer_studio.measurement.models import MIN_AUTOMATIC_THICKNESS_CONFIDENCE, ImagePoint
 from tooldrawer_studio.measurement.service import ThicknessMeasurementService
 
 
@@ -84,3 +84,25 @@ def test_uniform_image_has_no_usable_silhouette():
 
     with pytest.raises(ValueError, match="No usable side-profile silhouette"):
         ThicknessMeasurementService().measure(image, _calibration())
+
+
+def test_elongated_profile_is_preferred_over_compact_blob():
+    image = np.full((220, 420, 3), 245, dtype=np.uint8)
+    cv2.rectangle(image, (20, 20), (140, 140), (20, 20, 20), -1)
+    cv2.rectangle(image, (180, 90), (400, 130), (20, 20, 20), -1)
+
+    result = ThicknessMeasurementService().measure(image, _calibration())
+
+    assert result.automatic_thickness_mm == pytest.approx(20.0, abs=2.0)
+
+
+def test_hint_selects_the_compact_silhouette():
+    image = np.full((220, 420, 3), 245, dtype=np.uint8)
+    cv2.rectangle(image, (20, 20), (140, 140), (20, 20, 20), -1)
+    cv2.rectangle(image, (180, 90), (400, 130), (20, 20, 20), -1)
+
+    result = ThicknessMeasurementService().measure(
+        image, _calibration(), hint_px=ImagePoint(80, 80)
+    )
+
+    assert result.automatic_thickness_mm == pytest.approx(60.0, abs=4.0)

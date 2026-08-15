@@ -2,21 +2,26 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
+    QSplitter,
     QVBoxLayout,
     QWidget,
 )
 
 from tooldrawer_studio.domain.models import Project, ToolObject
 from tooldrawer_studio.ui.measurement_view import MeasurementImageView
+from tooldrawer_studio.ui.theme import mark_primary, muted_label, stage_header
 
 
 class MeasurePanel(QWidget):
@@ -37,9 +42,24 @@ class MeasurePanel(QWidget):
         self._updating = False
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        layout.addWidget(
+            stage_header(
+                "Measure",
+                "Thickness comes from a side-view photo. Pocket depth is suggested from that thickness and is never silently overwritten.",
+            )
+        )
 
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+
+        photo = QWidget()
+        photo_layout = QVBoxLayout(photo)
+        photo_layout.setContentsMargins(0, 0, 0, 0)
+        photo_layout.setSpacing(10)
         self.tool_label = QLabel("Tool: none selected")
-        layout.addWidget(self.tool_label)
+        photo_layout.addWidget(self.tool_label)
 
         source_row = QHBoxLayout()
         self.source_combo = QComboBox()
@@ -49,17 +69,18 @@ class MeasurePanel(QWidget):
         source_row.addWidget(self.source_combo, 1)
         source_row.addWidget(self.attach_button)
         source_row.addWidget(self.calibrate_button)
-        layout.addLayout(source_row)
+        photo_layout.addLayout(source_row)
 
-        self.calibration_label = QLabel("Side-view calibration: not set")
-        layout.addWidget(self.calibration_label)
+        self.calibration_label = muted_label("Side-view calibration: not set")
+        photo_layout.addWidget(self.calibration_label)
 
         self.measurement_view = MeasurementImageView()
+        self.measurement_view.setObjectName("imageWell")
         self.measurement_view.setMinimumHeight(280)
-        layout.addWidget(self.measurement_view, 1)
+        photo_layout.addWidget(self.measurement_view, 1)
 
         measurement_actions = QHBoxLayout()
-        self.measure_button = QPushButton("Measure Automatically")
+        self.measure_button = mark_primary(QPushButton("Measure Automatically"))
         self.accept_button = QPushButton("Accept Measurement")
         self.manual_points_button = QPushButton("Manual Two-Point")
         self.reset_button = QPushButton("Reset to Automatic")
@@ -69,8 +90,23 @@ class MeasurePanel(QWidget):
         measurement_actions.addWidget(self.accept_button)
         measurement_actions.addWidget(self.manual_points_button)
         measurement_actions.addWidget(self.reset_button)
-        layout.addLayout(measurement_actions)
+        fit_button = QPushButton("Fit")
+        zoom_button = QPushButton("1:1")
+        fit_button.clicked.connect(self.measurement_view.fit_image)
+        zoom_button.clicked.connect(self.measurement_view.zoom_1_to_1)
+        measurement_actions.addWidget(fit_button)
+        measurement_actions.addWidget(zoom_button)
+        photo_layout.addLayout(measurement_actions)
+        splitter.addWidget(photo)
 
+        settings = QWidget()
+        settings.setObjectName("sidePanel")
+        settings_layout = QVBoxLayout(settings)
+        settings_layout.setContentsMargins(12, 12, 12, 12)
+        settings_layout.setSpacing(10)
+
+        thickness_box = QGroupBox("Thickness")
+        thickness_layout = QVBoxLayout(thickness_box)
         result_form = QFormLayout()
         self.automatic_thickness_label = QLabel("--")
         self.accepted_thickness_label = QLabel("--")
@@ -81,23 +117,24 @@ class MeasurePanel(QWidget):
         result_form.addRow("Accepted thickness", self.accepted_thickness_label)
         result_form.addRow("Confidence", self.confidence_label)
         result_form.addRow("Warnings", self.warnings_label)
-        layout.addLayout(result_form)
-
+        thickness_layout.addLayout(result_form)
         manual_row = QHBoxLayout()
         self.manual_thickness = self._millimetres(0.001, 1000.0, 10.0)
         self.manual_thickness_apply = QPushButton("Use Exact Thickness")
         manual_row.addWidget(QLabel("Exact physical thickness"))
         manual_row.addWidget(self.manual_thickness)
         manual_row.addWidget(self.manual_thickness_apply)
-        manual_row.addStretch()
-        layout.addLayout(manual_row)
+        thickness_layout.addLayout(manual_row)
+        settings_layout.addWidget(thickness_box)
 
+        pocket_box = QGroupBox("Pocket depth")
+        pocket_layout = QVBoxLayout(pocket_box)
         defaults_form = QFormLayout()
         self.project_exposed_height = self._millimetres(0.0, 1000.0, 4.0)
         self.project_bottom_clearance = self._millimetres(0.0, 1000.0, 0.8)
         defaults_form.addRow("Project exposed-height default", self.project_exposed_height)
         defaults_form.addRow("Project bottom-clearance default", self.project_bottom_clearance)
-        layout.addLayout(defaults_form)
+        pocket_layout.addLayout(defaults_form)
 
         exposed_row = QHBoxLayout()
         self.exposed_override = QCheckBox("Override for this tool")
@@ -106,7 +143,7 @@ class MeasurePanel(QWidget):
         exposed_row.addWidget(self.exposed_override)
         exposed_row.addWidget(self.exposed_override_value)
         exposed_row.addWidget(self.exposed_effective_label, 1)
-        layout.addLayout(exposed_row)
+        pocket_layout.addLayout(exposed_row)
 
         bottom_row = QHBoxLayout()
         self.bottom_override = QCheckBox("Override for this tool")
@@ -115,26 +152,35 @@ class MeasurePanel(QWidget):
         bottom_row.addWidget(self.bottom_override)
         bottom_row.addWidget(self.bottom_override_value)
         bottom_row.addWidget(self.bottom_effective_label, 1)
-        layout.addLayout(bottom_row)
+        pocket_layout.addLayout(bottom_row)
 
         depth_form = QFormLayout()
         self.suggested_depth_label = QLabel("--")
         self.final_depth_label = QLabel("--")
         depth_form.addRow("Suggested pocket depth", self.suggested_depth_label)
         depth_form.addRow("Final pocket depth", self.final_depth_label)
-        layout.addLayout(depth_form)
+        pocket_layout.addLayout(depth_form)
 
         pocket_row = QHBoxLayout()
         self.pocket_override = QCheckBox("Override final pocket depth")
         self.pocket_override_value = self._millimetres(0.001, 1000.0, 5.0)
         pocket_row.addWidget(self.pocket_override)
         pocket_row.addWidget(self.pocket_override_value)
-        pocket_row.addStretch()
-        layout.addLayout(pocket_row)
+        pocket_layout.addLayout(pocket_row)
+        settings_layout.addWidget(pocket_box)
 
-        self.review_label = QLabel()
-        self.review_label.setWordWrap(True)
-        layout.addWidget(self.review_label)
+        self.review_label = muted_label("")
+        settings_layout.addWidget(self.review_label)
+        settings_layout.addStretch()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(settings)
+        splitter.addWidget(scroll)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        layout.addWidget(splitter, 1)
 
         self.attach_button.clicked.connect(self.attachRequested.emit)
         self.calibrate_button.clicked.connect(self.calibrateRequested.emit)

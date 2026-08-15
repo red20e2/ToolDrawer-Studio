@@ -6,6 +6,7 @@ import math
 from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QPainterPath, QPen, QUndoCommand, QUndoStack
 from PySide6.QtWidgets import (
+    QFrame,
     QGraphicsItem,
     QGraphicsPathItem,
     QGraphicsScene,
@@ -88,6 +89,8 @@ class ArrangementView(QWidget):
         super().__init__(parent)
         self.scene = QGraphicsScene(self)
         self.view = QGraphicsView(self.scene, self)
+        self.view.setObjectName("imageWell")
+        self.view.setFrameShape(QFrame.Shape.NoFrame)
         self.view.setRenderHints(self.view.renderHints())
         self.view.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         self.undo_stack = QUndoStack(self)
@@ -98,6 +101,7 @@ class ArrangementView(QWidget):
         self._validation = LayoutValidationResult(True, ())
         self._selected_ids: set[str] = set()
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.view)
         self.scene.selectionChanged.connect(self._scene_selection_changed)
 

@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -18,14 +20,20 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QSpinBox,
+    QScrollArea,
+    QSplitter,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from tooldrawer_studio.calibration.presets import A4, LETTER
-from tooldrawer_studio.calibration.target import CalibrationTargetSpec, write_target_svg
+from tooldrawer_studio.calibration.service import KNOWN_DISTANCE_PERSPECTIVE_WARNING
+from tooldrawer_studio.calibration.target import (
+    CalibrationTargetSpec,
+    detect_target,
+    write_target_svg,
+)
 from tooldrawer_studio.capture.pending import CaptureSessionService
 from tooldrawer_studio.capture.phone_server import PhoneUploadServer
 from tooldrawer_studio.capture.phone_session import PhoneSession
@@ -39,6 +47,7 @@ from tooldrawer_studio.ui.contour_editor import ContourEditor
 from tooldrawer_studio.ui.generate_panel import GeneratePanel
 from tooldrawer_studio.ui.measure_panel import MeasurePanel
 from tooldrawer_studio.ui.model_preview import ModelPreview
+from tooldrawer_studio.ui.theme import apply_theme, mark_primary, muted_label, stage_header
 from tooldrawer_studio.ui.webcam_panel import WebcamPanel
 from tooldrawer_studio.ui.workflow_controller import (
     MIN_AUTOMATIC_TRACE_CALIBRATION_CONFIDENCE,
@@ -49,8 +58,10 @@ from tooldrawer_studio.ui.workflow_controller import (
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
+        apply_theme()
         self.setWindowTitle("ToolDrawer Studio")
-        self.resize(1100, 760)
+        self.resize(1280, 820)
+        self.setMinimumSize(960, 640)
         self.controller = WorkflowController()
 
         self.capture_session = CaptureSessionService()
@@ -64,6 +75,7 @@ class MainWindow(QMainWindow):
         self._measurement_warnings: dict[str, tuple[str, ...]] = {}
 
         self.tabs = QTabWidget(self)
+        self.tabs.setDocumentMode(True)
         self.setCentralWidget(self.tabs)
         self.tabs.addTab(self._capture_stage(), "1. Import & Calibrate")
         self.tabs.addTab(self._edit_stage(), "2. Detect & Edit")
@@ -81,6 +93,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._export_stage(), "6. Save & Export")
         for index in (1, 2, 3, 4, 5):
             self.tabs.setTabEnabled(index, False)
+
+        self.statusBar().showMessage("Import a photo or open a .tds project to begin")
+        self.tabs.currentChanged.connect(self._stage_changed)
 
         self.capture_poll_timer = QTimer(self)
         self.capture_poll_timer.setInterval(250)
@@ -104,10 +119,18 @@ class MainWindow(QMainWindow):
     def _capture_stage(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
         self.capture_layout = layout
+        layout.addWidget(
+            stage_header(
+                "Import & Calibrate",
+                "Bring in a photo, then click a known size so every later measurement is in millimetres.",
+            )
+        )
 
         controls = QHBoxLayout()
-        import_button = QPushButton("Import Photo")
+        import_button = mark_primary(QPushButton("Import Photo"))
         open_button = QPushButton("Open .tds Project")
         self.webcam_button = QPushButton("Webcam…")
         self.start_phone_button = QPushButton("Start Phone Session")
@@ -126,8 +149,10 @@ class MainWindow(QMainWindow):
         controls.addStretch()
         layout.addLayout(controls)
 
-        phone_row = QHBoxLayout()
+        phone_box = QGroupBox("Phone capture")
+        phone_row = QHBoxLayout(phone_box)
         self.phone_qr_label = QLabel()
+        self.phone_qr_label.setObjectName("phoneQr")
         self.phone_qr_label.setMinimumSize(140, 140)
         self.phone_qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.phone_qr_label.setVisible(False)
@@ -144,15 +169,18 @@ class MainWindow(QMainWindow):
         phone_text.addStretch()
         phone_row.addWidget(self.phone_qr_label)
         phone_row.addLayout(phone_text, 1)
-        layout.addLayout(phone_row)
+        layout.addWidget(phone_box)
 
         self.capture_tray = CaptureTrayWidget(self.capture_session)
         self.capture_tray.set_promote_callback(self._promote_pending_capture)
         layout.addWidget(self.capture_tray)
 
+        calibration_box = QGroupBox("Calibration")
+        calibration_layout = QVBoxLayout(calibration_box)
         self.calibration_view = CalibrationImageView()
-        self.calibration_view.setMinimumHeight(300)
-        layout.addWidget(self.calibration_view, 1)
+        self.calibration_view.setObjectName("imageWell")
+        self.calibration_view.setMinimumHeight(280)
+        calibration_layout.addWidget(self.calibration_view, 1)
 
         form = QFormLayout()
         self.calibration_mode = QComboBox()
@@ -179,41 +207,46 @@ class MainWindow(QMainWindow):
         self.target_paper.addItem("A4", "a4")
         self.target_paper.addItem("US Letter", "letter")
         form.addRow(self.target_paper_label, self.target_paper)
-        layout.addLayout(form)
+        calibration_layout.addLayout(form)
 
-        self.calibration_instruction = QLabel()
-        self.calibration_instruction.setWordWrap(True)
-        layout.addWidget(self.calibration_instruction)
+        self.calibration_instruction = muted_label("")
+        calibration_layout.addWidget(self.calibration_instruction)
 
         calibration_actions = QHBoxLayout()
         clear_points_button = QPushButton("Clear Points")
         clear_points_button.clicked.connect(self.calibration_view.clear_points)
-        self.calibrate_button = QPushButton("Calibrate")
+        self.calibrate_button = mark_primary(QPushButton("Calibrate"))
         self.calibrate_button.clicked.connect(self._calibrate)
         self.save_target_button = QPushButton("Save Printable Target…")
         self.save_target_button.clicked.connect(self._save_target)
-        self.detect_target_button = QPushButton("Detect Target")
+        self.detect_target_button = mark_primary(QPushButton("Detect Target"))
         self.detect_target_button.clicked.connect(self._detect_target_calibration)
         calibration_actions.addWidget(clear_points_button)
         calibration_actions.addWidget(self.calibrate_button)
         calibration_actions.addWidget(self.save_target_button)
         calibration_actions.addWidget(self.detect_target_button)
+        fit_button = QPushButton("Fit")
+        zoom_button = QPushButton("1:1")
+        fit_button.clicked.connect(self.calibration_view.fit_image)
+        zoom_button.clicked.connect(self.calibration_view.zoom_1_to_1)
+        calibration_actions.addWidget(fit_button)
+        calibration_actions.addWidget(zoom_button)
         calibration_actions.addStretch()
-        layout.addLayout(calibration_actions)
+        calibration_layout.addLayout(calibration_actions)
 
         self.calibration_status = QLabel("Calibration: not set")
-        layout.addWidget(self.calibration_status)
+        calibration_layout.addWidget(self.calibration_status)
         self.low_confidence_override = QCheckBox(
             "Allow low-confidence automatic tracing"
         )
         self.low_confidence_override.setVisible(False)
-        layout.addWidget(self.low_confidence_override)
+        calibration_layout.addWidget(self.low_confidence_override)
 
-        disclaimer = QLabel(
+        disclaimer = muted_label(
             "Photo-derived dimensions are manufacturing aids, not metrology-grade measurements."
         )
-        disclaimer.setWordWrap(True)
-        layout.addWidget(disclaimer)
+        calibration_layout.addWidget(disclaimer)
+        layout.addWidget(calibration_box, 1)
 
         self.calibration_mode.currentIndexChanged.connect(
             self._calibration_mode_changed
@@ -223,9 +256,22 @@ class MainWindow(QMainWindow):
 
     def _edit_stage(self) -> QWidget:
         page = QWidget()
-        layout = QHBoxLayout(page)
-        left = QVBoxLayout()
-        detect_button = QPushButton("Detect Tools")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(12)
+        outer.addWidget(
+            stage_header(
+                "Detect & Edit",
+                "Trace tool outlines, then drag vertices against the photo. Clearance is manufacturing fit, not layout spacing.",
+            )
+        )
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        sidebar = QWidget()
+        sidebar.setObjectName("sidePanel")
+        left = QVBoxLayout(sidebar)
+        left.setContentsMargins(12, 12, 12, 12)
+        detect_button = mark_primary(QPushButton("Detect Tools"))
         detect_button.clicked.connect(self._detect_tools)
         left.addWidget(detect_button)
         self.tool_list = QListWidget()
@@ -240,18 +286,11 @@ class MainWindow(QMainWindow):
         apply_button = QPushButton("Apply Tool Settings")
         apply_button.clicked.connect(self._apply_tool_settings)
         left.addWidget(apply_button)
-        self.segment_index = QSpinBox()
-        self.vertex_index = QSpinBox()
-        left.addWidget(QLabel("Segment index for midpoint insert"))
-        left.addWidget(self.segment_index)
-        insert_button = QPushButton("Insert Midpoint")
-        insert_button.clicked.connect(self._insert_midpoint)
-        left.addWidget(insert_button)
-        left.addWidget(QLabel("Vertex index to delete"))
-        left.addWidget(self.vertex_index)
-        delete_button = QPushButton("Delete Vertex")
-        delete_button.clicked.connect(self._delete_vertex)
-        left.addWidget(delete_button)
+        hint = muted_label(
+            "Click a contour edge to insert a vertex. Select a handle and press Delete to remove it. "
+            "Hold Alt while dragging to disable magnetic snap."
+        )
+        left.addWidget(hint)
         actions = QHBoxLayout()
         undo_button = QPushButton("Undo")
         redo_button = QPushButton("Redo")
@@ -260,30 +299,52 @@ class MainWindow(QMainWindow):
         actions.addWidget(redo_button)
         actions.addWidget(reset_button)
         left.addLayout(actions)
-        layout.addLayout(left, 1)
-        right = QVBoxLayout()
+        splitter.addWidget(sidebar)
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
         self.contour_editor = ContourEditor()
         self.contour_editor.contourChanged.connect(self._contour_changed)
         undo_button.clicked.connect(self.contour_editor.undo_stack.undo)
         redo_button.clicked.connect(self.contour_editor.undo_stack.redo)
         reset_button.clicked.connect(self._reset_trace)
-        right.addWidget(self.contour_editor)
-        self.coordinate_label = QLabel("Vertex: --")
+        right_layout.addWidget(self.contour_editor)
+        self.coordinate_label = muted_label("Vertex: --")
         self.contour_editor.coordinateChanged.connect(
             lambda x, y: self.coordinate_label.setText(
                 f"Vertex: {x:.3f}, {y:.3f} mm"
             )
         )
-        right.addWidget(self.coordinate_label)
-        layout.addLayout(right, 3)
+        right_layout.addWidget(self.coordinate_label)
+        splitter.addWidget(right)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+        outer.addWidget(splitter, 1)
         return page
 
     def _arrange_stage(self) -> QWidget:
         page = QWidget()
-        layout = QHBoxLayout(page)
-        layout.addWidget(self.arrange_panel, 1)
-        right = QVBoxLayout()
-        right.addWidget(self.arrangement_view, 1)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(12)
+        outer.addWidget(
+            stage_header(
+                "Arrange",
+                "Pack real cavity contours into the drawer or Gridfinity area. Locked tools stay put during re-pack.",
+            )
+        )
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        side = QScrollArea()
+        side.setWidgetResizable(True)
+        side.setFrameShape(QFrame.Shape.NoFrame)
+        side.setObjectName("sidePanel")
+        splitter.addWidget(side)
+        side.setWidget(self.arrange_panel)
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.addWidget(self.arrangement_view, 1)
         actions = QHBoxLayout()
         undo_button = QPushButton("Undo Arrange")
         redo_button = QPushButton("Redo Arrange")
@@ -292,35 +353,80 @@ class MainWindow(QMainWindow):
         actions.addWidget(undo_button)
         actions.addWidget(redo_button)
         actions.addStretch()
-        right.addLayout(actions)
-        layout.addLayout(right, 3)
+        right_layout.addLayout(actions)
+        splitter.addWidget(right)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+        outer.addWidget(splitter, 1)
         return page
 
     def _generate_stage(self) -> QWidget:
         page = QWidget()
-        layout = QHBoxLayout(page)
-        layout.addWidget(self.generate_panel, 1)
-        preview_column = QVBoxLayout()
-        preview_title = QLabel("3D Manufacturing Preview")
-        preview_column.addWidget(preview_title)
-        preview_column.addWidget(self.model_preview, 1)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(12)
+        outer.addWidget(
+            stage_header(
+                "Generate",
+                "Build the organizer solid from the current layout and pocket depths. Generation never moves tools to force a fit.",
+            )
+        )
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        side = QScrollArea()
+        side.setWidgetResizable(True)
+        side.setFrameShape(QFrame.Shape.NoFrame)
+        side.setObjectName("sidePanel")
+        side.setWidget(self.generate_panel)
+        splitter.addWidget(side)
+        preview_column = QWidget()
+        preview_layout = QVBoxLayout(preview_column)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_title = QLabel("3D manufacturing preview")
+        preview_title.setObjectName("sectionTitle")
+        preview_layout.addWidget(preview_title)
+        self.model_preview.setObjectName("imageWell")
+        preview_layout.addWidget(self.model_preview, 1)
         reset_view = QPushButton("Reset 3D View")
         reset_view.clicked.connect(self.model_preview.reset_view)
-        preview_column.addWidget(reset_view)
-        layout.addLayout(preview_column, 3)
+        preview_layout.addWidget(reset_view)
+        splitter.addWidget(preview_column)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+        outer.addWidget(splitter, 1)
         return page
 
     def _export_stage(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        save_button = QPushButton("Save Editable .tds Project")
-        save_button.clicked.connect(self._save_project)
-        layout.addWidget(save_button)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        layout.addWidget(
+            stage_header(
+                "Save & Export",
+                "Keep the editable .tds project separate from manufacturing files. Export is available only after a current Generate result.",
+            )
+        )
 
+        project_box = QGroupBox("Editable project")
+        project_layout = QVBoxLayout(project_box)
+        project_layout.addWidget(
+            muted_label("Saves captures, calibrations, contours, measure, and layout. Does not write STEP/STL/DXF.")
+        )
+        save_button = mark_primary(QPushButton("Save Editable .tds Project"))
+        save_button.clicked.connect(self._save_project)
+        project_layout.addWidget(save_button)
+        layout.addWidget(project_box)
+
+        export_box = QGroupBox("Manufacturing export")
+        export_layout = QVBoxLayout(export_box)
+        export_layout.addWidget(
+            muted_label("Exports the complete organizer. Refused if Generate is missing or stale.")
+        )
         self.export_step_button = QPushButton("Export STEP")
         self.export_stl_button = QPushButton("Export STL")
         self.export_dxf_button = QPushButton("Export DXF")
-        self.export_all_button = QPushButton("Export All")
+        self.export_all_button = mark_primary(QPushButton("Export All"))
         for button in (
             self.export_step_button,
             self.export_stl_button,
@@ -340,13 +446,16 @@ class MainWindow(QMainWindow):
         self.export_all_button.clicked.connect(
             lambda: self._export_generated_files({"step", "stl", "dxf"})
         )
-        layout.addWidget(self.export_step_button)
-        layout.addWidget(self.export_stl_button)
-        layout.addWidget(self.export_dxf_button)
-        layout.addWidget(self.export_all_button)
-        self.export_status = QLabel("No manufacturing export yet")
-        self.export_status.setWordWrap(True)
-        layout.addWidget(self.export_status)
+        row = QHBoxLayout()
+        row.addWidget(self.export_step_button)
+        row.addWidget(self.export_stl_button)
+        row.addWidget(self.export_dxf_button)
+        row.addWidget(self.export_all_button)
+        row.addStretch()
+        export_layout.addLayout(row)
+        self.export_status = muted_label("No manufacturing export yet")
+        export_layout.addWidget(self.export_status)
+        layout.addWidget(export_box)
         layout.addStretch()
         return page
 
@@ -374,6 +483,9 @@ class MainWindow(QMainWindow):
             self._measure_pocket_override_changed
         )
         self.measure_panel.endpointsChanged.connect(self._measure_endpoints_changed)
+        self.measure_panel.measurement_view.silhouetteClicked.connect(
+            self._measure_silhouette_clicked
+        )
 
     def _connect_arrange(self) -> None:
         self.arrange_panel.layoutRequested.connect(self._arrange_layout_requested)
@@ -462,6 +574,17 @@ class MainWindow(QMainWindow):
     def _show_error(self, exc: Exception) -> None:
         QMessageBox.critical(self, "ToolDrawer Studio", str(exc))
 
+    def _stage_changed(self, index: int) -> None:
+        hints = {
+            0: "Import a photo, then calibrate a known size in the image.",
+            1: "Detect tools and refine each silhouette against the photo.",
+            2: "Measure thickness from a calibrated side view, or enter it exactly.",
+            3: "Arrange cavities inside the foam or Gridfinity boundary.",
+            4: "Generate the organizer solid without changing the layout.",
+            5: "Save the editable project, then export STEP, STL, or DXF.",
+        }
+        self.statusBar().showMessage(hints.get(index, ""))
+
     def _calibration_mode_changed(self, _index: int | None = None) -> None:
         mode = str(self.calibration_mode.currentData())
         required = {
@@ -489,7 +612,11 @@ class MainWindow(QMainWindow):
         self.calibrate_button.setVisible(not target)
 
         instructions = {
-            "known_distance": "Click two points with a known real-world distance between them.",
+            "known_distance": (
+                "Click two points with a known real-world distance between them. "
+                "This method does not correct perspective — prefer paper, a known-size object, "
+                "or the printable target for manufacturing."
+            ),
             "paper_a4": "Click A4 corners in order: top-left, top-right, bottom-right, bottom-left.",
             "paper_letter": "Click Letter corners in order: top-left, top-right, bottom-right, bottom-left.",
             "known_object": "Click object corners in order: top-left, top-right, bottom-right, bottom-left, then enter its real dimensions.",
@@ -507,15 +634,18 @@ class MainWindow(QMainWindow):
         return CalibrationTargetSpec(paper)
 
     def _update_calibration_status(self, record: CalibrationRecord) -> None:
+        extra = f", residual {record.residual_mm:.2f} mm"
+        if record.method == "known_distance":
+            extra += f". {KNOWN_DISTANCE_PERSPECTIVE_WARNING}"
         if self._measure_calibration_tool_id is not None:
             self.calibration_status.setText(
-                f"Side-view calibration: {record.method}, confidence {record.confidence:.0%}"
+                f"Side-view calibration: {record.method}, confidence {record.confidence:.0%}{extra}"
             )
             self.low_confidence_override.setChecked(False)
             self.low_confidence_override.setVisible(False)
             return
         self.calibration_status.setText(
-            f"Calibration: {record.method}, confidence {record.confidence:.0%}"
+            f"Calibration: {record.method}, confidence {record.confidence:.0%}{extra}"
         )
         low = record.confidence < MIN_AUTOMATIC_TRACE_CALIBRATION_CONFIDENCE
         self.low_confidence_override.setVisible(low)
@@ -583,7 +713,10 @@ class MainWindow(QMainWindow):
                     on_capture=self._capture_source_changed,
                     parent=self,
                 )
-                self.capture_layout.insertWidget(2, self.webcam_panel)
+                self.capture_layout.insertWidget(
+                    self.capture_layout.indexOf(self.capture_tray),
+                    self.webcam_panel,
+                )
                 self.webcam_panel.refresh_cameras()
                 self.webcam_panel.show()
                 return
@@ -703,7 +836,14 @@ class MainWindow(QMainWindow):
 
     def _detect_target_calibration(self) -> None:
         try:
-            record = self.controller.calibrate_target(self._target_spec())
+            spec = self._target_spec()
+            capture_id = self.controller.active_capture_id
+            if capture_id is None:
+                raise ValueError("Import an image before detecting a calibration target")
+            image = self.controller.loaded_image(capture_id)
+            detected = detect_target(image, spec)
+            self.calibration_view.set_points(detected.corners_px)
+            record = self.controller.calibrate_target(spec)
             self._update_calibration_status(record)
             self._advance_after_calibration(record)
         except Exception as exc:
@@ -742,9 +882,13 @@ class MainWindow(QMainWindow):
             tool = self.controller.selected_tool()
             self.tool_name.setText(tool.name)
             self.tool_clearance.setValue(tool.clearance_mm)
-            self.segment_index.setMaximum(max(0, len(tool.contour_mm) - 1))
-            self.vertex_index.setMaximum(max(0, len(tool.contour_mm) - 1))
-            self.contour_editor.set_tool(tool)
+            pixels = None
+            calibration = self.controller.calibration_for_capture(tool.source_capture_id)
+            try:
+                pixels = self.controller.loaded_image(tool.source_capture_id).pixels_bgr
+            except KeyError:
+                pixels = None
+            self.contour_editor.set_tool(tool, pixels_bgr=pixels, calibration=calibration)
             self.tabs.setTabEnabled(2, True)
             self.tabs.setTabEnabled(3, True)
             self._refresh_measure_state()
@@ -770,27 +914,6 @@ class MainWindow(QMainWindow):
             if current is not None:
                 current.setText(self.controller.selected_tool().name)
             self._refresh_measure_state()
-        except Exception as exc:
-            self._show_error(exc)
-
-    def _insert_midpoint(self) -> None:
-        try:
-            points = self.contour_editor.contour()
-            if not points:
-                return
-            index = self.segment_index.value()
-            following = (index + 1) % len(points)
-            midpoint = Point2D(
-                (points[index].x_mm + points[following].x_mm) / 2.0,
-                (points[index].y_mm + points[following].y_mm) / 2.0,
-            )
-            self.contour_editor.insert_vertex(index, midpoint)
-        except Exception as exc:
-            self._show_error(exc)
-
-    def _delete_vertex(self) -> None:
-        try:
-            self.contour_editor.delete_vertex(self.vertex_index.value())
         except Exception as exc:
             self._show_error(exc)
 
@@ -1118,6 +1241,20 @@ class MainWindow(QMainWindow):
             self._refresh_measure_state()
         except Exception as exc:
             self._show_error(exc)
+
+    def _measure_silhouette_clicked(self, hint: object) -> None:
+        try:
+            from tooldrawer_studio.measurement.models import ImagePoint
+
+            if not isinstance(hint, ImagePoint):
+                return
+            tool = self.controller.selected_tool()
+            result = self.controller.measure_tool_thickness(tool.id, hint_px=hint)
+            self._measurement_warnings[tool.id] = result.warnings
+            self.measure_panel.measurement_view.set_manual_point_mode(False)
+            self._refresh_measure_state()
+        except Exception:
+            return
 
     def _measure_accept_automatic(self) -> None:
         try:

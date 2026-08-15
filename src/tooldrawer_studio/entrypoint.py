@@ -41,6 +41,9 @@ def main(argv: list[str] | None = None) -> int:
         return result
 
     app = QApplication(sys.argv if argv is None else [sys.argv[0], *args])
+    from tooldrawer_studio.ui.theme import apply_theme
+
+    apply_theme(app)
     window = build_main_window()
     window.show()
     return app.exec()

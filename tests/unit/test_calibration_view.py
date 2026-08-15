@@ -9,6 +9,7 @@ from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
+from tooldrawer_studio.calibration.service import PixelPoint
 from tooldrawer_studio.ui.calibration_view import CalibrationImageView
 
 
@@ -80,4 +81,27 @@ def test_zero_required_points_disables_manual_collection():
     app.processEvents()
 
     assert view.points_px() == ()
+    view.close()
+
+
+def test_set_points_fills_draggable_markers():
+    app = _app()
+    view = CalibrationImageView()
+    view.resize(500, 250)
+    view.set_image_bytes(_image_bytes())
+    view.set_required_points(4)
+    view.set_points(
+        (
+            PixelPoint(100.0, 80.0),
+            PixelPoint(800.0, 80.0),
+            PixelPoint(800.0, 400.0),
+            PixelPoint(100.0, 400.0),
+        )
+    )
+    view.show()
+    app.processEvents()
+
+    points = view.points_px()
+    assert len(points) == 4
+    assert points[0].x_px == pytest.approx(100.0, abs=1.0)
     view.close()

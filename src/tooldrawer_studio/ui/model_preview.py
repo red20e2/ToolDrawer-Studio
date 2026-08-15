@@ -80,9 +80,9 @@ class ModelPreview(QWidget):
         del event
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.fillRect(self.rect(), self.palette().base())
+        painter.fillRect(self.rect(), QColor("#12141a"))
         if not self.vertices.size or not self.triangles.size:
-            painter.setPen(self.palette().text().color())
+            painter.setPen(QColor("#9aa3b2"))
             painter.drawText(
                 self.rect(),
                 Qt.AlignmentFlag.AlignCenter,

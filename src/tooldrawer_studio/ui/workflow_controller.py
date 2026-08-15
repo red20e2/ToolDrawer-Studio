@@ -146,6 +146,12 @@ class WorkflowController:
             raise KeyError(f"Unknown capture id: {capture_id}")
         return normalized_png_bytes(image)
 
+    def loaded_image(self, capture_id: str) -> LoadedImage:
+        image = self._loaded_images.get(capture_id)
+        if image is None:
+            raise KeyError(f"Unknown capture id: {capture_id}")
+        return image
+
     def _store_loaded_image(self, loaded: LoadedImage) -> str:
         capture_id = loaded.asset.id
         self.project.captures.append(loaded.asset)
@@ -676,9 +682,16 @@ class WorkflowController:
             raise ValueError("Calibrate the side-view capture before measuring thickness")
         return tool, image, calibration
 
-    def measure_tool_thickness(self, tool_id: str) -> ThicknessMeasurementResult:
+    def measure_tool_thickness(
+        self, tool_id: str, hint_px: ImagePoint | None = None
+    ) -> ThicknessMeasurementResult:
         tool, image, calibration = self._side_view_context(tool_id)
-        result = self._measurement_service.measure(image.pixels_bgr, calibration)
+        if hint_px is None:
+            result = self._measurement_service.measure(image.pixels_bgr, calibration)
+        else:
+            result = self._measurement_service.measure(
+                image.pixels_bgr, calibration, hint_px=hint_px
+            )
         preserve_accepted = (
             tool.thickness_measurement_mode in {"manual", "endpoints"}
             and tool.thickness_accepted

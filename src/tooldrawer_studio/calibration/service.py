@@ -10,6 +10,11 @@ import numpy as np
 from tooldrawer_studio.calibration.presets import PaperPreset
 from tooldrawer_studio.domain.models import CalibrationRecord, Point2D
 
+KNOWN_DISTANCE_PERSPECTIVE_WARNING = (
+    "Known-distance calibration does not correct perspective. "
+    "Prefer paper, a known-size object, or the printable target for manufacturing."
+)
+
 
 @dataclass(frozen=True, slots=True)
 class PixelPoint:
@@ -30,7 +35,7 @@ def _known_distance_confidence(pixel_span: float) -> float:
     return 0.35 + (0.98 - 0.35) * progress
 
 
-def _rectangle_confidence(source: np.ndarray) -> float:
+def _rectangle_span_fill_scores(source: np.ndarray) -> tuple[float, float]:
     edges = [
         hypot(
             float(source[(index + 1) % 4, 0] - source[index, 0]),
@@ -46,7 +51,33 @@ def _rectangle_confidence(source: np.ndarray) -> float:
     height = float(np.ptp(source[:, 1]))
     bounding_area = width * height
     fill_score = _clamp01(area / bounding_area) if bounding_area > 1e-12 else 0.0
-    return 0.35 + (0.98 - 0.35) * min(span_score, fill_score)
+    return span_score, fill_score
+
+
+def _rectangle_confidence(source: np.ndarray, residual_mm: float) -> float:
+    span_score, fill_score = _rectangle_span_fill_scores(source)
+    residual_score = _clamp01((0.8 - residual_mm) / 0.8)
+    return 0.35 + (0.98 - 0.35) * min(span_score, fill_score, residual_score)
+
+
+def _apply_matrix(matrix: np.ndarray, x_px: float, y_px: float) -> Point2D:
+    mapped = matrix @ np.array([x_px, y_px, 1.0], dtype=np.float64)
+    if abs(mapped[2]) < 1e-12:
+        raise ValueError("Calibration transform maps point to infinity")
+    mapped /= mapped[2]
+    return Point2D(float(mapped[0]), float(mapped[1]))
+
+
+def _reprojection_residual_mm(
+    matrix: np.ndarray,
+    source_px: np.ndarray,
+    destination_mm: np.ndarray,
+) -> float:
+    errors: list[float] = []
+    for source, destination in zip(source_px, destination_mm):
+        mapped = _apply_matrix(matrix, float(source[0]), float(source[1]))
+        errors.append(hypot(mapped.x_mm - float(destination[0]), mapped.y_mm - float(destination[1])))
+    return float(sum(errors) / len(errors)) if errors else 0.0
 
 
 def _record(
@@ -109,10 +140,16 @@ def calibrate_known_distance(
         ],
         dtype=np.float64,
     )
+    residual_mm = _reprojection_residual_mm(
+        matrix,
+        np.array([[ax, ay], [float(pixel_b.x_px), float(pixel_b.y_px)]], dtype=np.float64),
+        np.array([[0.0, 0.0], [known_distance_mm, 0.0]], dtype=np.float64),
+    )
     return _record(
         capture_id,
         "known_distance",
         matrix,
+        residual_mm=residual_mm,
         confidence=_known_distance_confidence(pixel_distance),
     )
 
@@ -144,11 +181,13 @@ def _calibrate_rectangle_method(
         dtype=np.float32,
     )
     matrix = cv2.getPerspectiveTransform(source, destination).astype(np.float64)
+    residual_mm = _reprojection_residual_mm(matrix, source.astype(np.float64), destination.astype(np.float64))
     return _record(
         capture_id,
         method,
         matrix,
-        confidence=_rectangle_confidence(source),
+        residual_mm=residual_mm,
+        confidence=_rectangle_confidence(source, residual_mm),
     )
 
 
@@ -190,9 +229,13 @@ def calibrate_known_object(
 
 def pixel_to_mm(record: CalibrationRecord, pixel: PixelPoint) -> Point2D:
     matrix = np.asarray(record.matrix_3x3, dtype=np.float64)
-    source = np.array([pixel.x_px, pixel.y_px, 1.0], dtype=np.float64)
-    mapped = matrix @ source
+    return _apply_matrix(matrix, pixel.x_px, pixel.y_px)
+
+
+def mm_to_pixel(record: CalibrationRecord, point: Point2D) -> PixelPoint:
+    matrix = np.linalg.inv(np.asarray(record.matrix_3x3, dtype=np.float64))
+    mapped = matrix @ np.array([point.x_mm, point.y_mm, 1.0], dtype=np.float64)
     if abs(mapped[2]) < 1e-12:
         raise ValueError("Calibration transform maps point to infinity")
     mapped /= mapped[2]
-    return Point2D(float(mapped[0]), float(mapped[1]))
+    return PixelPoint(float(mapped[0]), float(mapped[1]))

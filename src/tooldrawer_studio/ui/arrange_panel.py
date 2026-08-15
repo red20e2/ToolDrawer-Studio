@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from tooldrawer_studio.domain.models import Project
 from tooldrawer_studio.layout.models import LayoutState, ToolPlacement
+from tooldrawer_studio.ui.theme import mark_primary, muted_label
 
 
 class ArrangePanel(QWidget):
@@ -40,6 +41,8 @@ class ArrangePanel(QWidget):
         self._updating = False
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(10)
         form = QFormLayout()
 
         self.mode_combo = QComboBox()
@@ -83,15 +86,14 @@ class ArrangePanel(QWidget):
         form.addRow("Movement snap increment", self.snap_increment)
         root.addLayout(form)
 
-        self.spacing_note = QLabel(
+        self.spacing_note = muted_label(
             "Layout spacing is separate from each tool's manufacturing pocket clearance."
         )
-        self.spacing_note.setWordWrap(True)
         root.addWidget(self.spacing_note)
 
         setup_actions = QHBoxLayout()
         self.apply_layout_button = QPushButton("Apply Layout Size")
-        self.auto_button = QPushButton("Auto Arrange")
+        self.auto_button = mark_primary(QPushButton("Auto Arrange"))
         self.repack_button = QPushButton("Re-pack Unlocked")
         setup_actions.addWidget(self.apply_layout_button)
         setup_actions.addWidget(self.auto_button)
