@@ -278,7 +278,9 @@ def _focus_color_mask(
     if low_chroma_threshold < thresholds[0]:
         thresholds.append(low_chroma_threshold)
     selected_mean_saturation = 0.0
-    selected_seed: np.ndarray | None = None
+    selected_bounds: tuple[int, int, int, int] | None = None
+    selected_component_mask: np.ndarray | None = None
+    selected_key: tuple[float, float, float, float, int] | None = None
     color_attempted = False
     previous_color_seed: np.ndarray | None = None
     minimum_overlap = max(12.0, 0.15 * line_length)
@@ -295,6 +297,7 @@ def _focus_color_mask(
             color_seed, previous_color_seed
         ):
             continue
+        higher_threshold_seed = previous_color_seed
         previous_color_seed = color_seed
         if color_pixel_count < 20:
             continue
@@ -302,8 +305,6 @@ def _focus_color_mask(
         component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
             color_seed
         )
-        selected_label: int | None = None
-        selected_key: tuple[float, float, float, float, int] | None = None
         for label in range(1, component_count):
             area = int(stats[label, cv2.CC_STAT_AREA])
             if area < 20:
@@ -317,6 +318,10 @@ def _focus_color_mask(
                 left : left + component_width,
             ]
             component_mask = labels[component_bounds] == label
+            if higher_threshold_seed is not None and np.any(
+                higher_threshold_seed[component_bounds][component_mask] != 0
+            ):
+                continue
             local_ys, local_xs = np.nonzero(component_mask)
             ys = local_ys + top
             xs = local_xs + left
@@ -350,20 +355,27 @@ def _focus_color_mask(
             cross_distance = abs(float(cross_positions.mean()))
             key = (axis_overlap, -cross_distance, axis_span, elongation, area)
             if selected_key is None or key > selected_key:
-                selected_label = label
                 selected_key = key
+                selected_bounds = (
+                    top,
+                    left,
+                    component_height,
+                    component_width,
+                )
+                selected_component_mask = component_mask.copy()
                 selected_mean_saturation = float(
                     saturation[component_bounds][component_mask].mean()
                 )
-        if selected_label is not None:
-            selected_seed = np.where(labels == selected_label, 255, 0).astype(
-                np.uint8
-            )
-            break
-    if selected_seed is None:
+    if selected_bounds is None or selected_component_mask is None:
         return None, color_attempted
 
-    color_seed = selected_seed
+    top, left, component_height, component_width = selected_bounds
+    color_seed = np.zeros((height, width), dtype=np.uint8)
+    selected_view = color_seed[
+        top : top + component_height,
+        left : left + component_width,
+    ]
+    selected_view[selected_component_mask] = 255
     if selected_mean_saturation <= 8.0:
         return color_seed, True
 

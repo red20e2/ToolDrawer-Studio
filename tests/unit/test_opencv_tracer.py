@@ -269,6 +269,29 @@ def test_focus_line_prefers_closer_pen_over_full_axis_saturated_marking(
     assert polygon.covers(Point(195.0, 0.0))
 
 
+def test_focus_line_prefers_six_saturation_pen_over_full_axis_marking(
+    tmp_path: Path,
+):
+    focus_line = (PixelPoint(105.0, 215.0), PixelPoint(495.0, 215.0))
+    pixels, pen_mask = _focused_pen_fixture(
+        (186, 183, 182),
+        full_axis_marking=True,
+        neutral_reference=True,
+    )
+
+    first = _trace_focused_pen(
+        tmp_path,
+        pixels,
+        "full-axis-marking-and-six-saturation-pen.png",
+        focus_line,
+    )
+    polygon, candidate_mask = _candidate_polygon_and_mask(first, focus_line)
+
+    assert polygon.is_valid
+    assert _mask_iou(candidate_mask, pen_mask) >= 0.94
+    assert polygon.covers(Point(195.0, 0.0))
+
+
 def test_focus_color_component_analysis_scans_only_local_bounds(monkeypatch):
     pixels = np.full((720, 1280, 3), 236, dtype=np.uint8)
     for row in range(8):
