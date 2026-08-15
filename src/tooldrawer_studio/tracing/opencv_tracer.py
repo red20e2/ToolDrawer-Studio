@@ -445,6 +445,11 @@ class OpenCVTracer:
             return global_candidates
         focused_candidates = _candidates_from_mask(focused_mask, calibration, config)
         if not focused_candidates:
+            global_candidates.sort(
+                key=lambda candidate: _focus_sort_key(
+                    candidate, calibration, effective_focus
+                )
+            )
             return global_candidates
 
         focused_candidates.sort(
