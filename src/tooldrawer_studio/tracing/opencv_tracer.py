@@ -15,15 +15,6 @@ from tooldrawer_studio.geometry.contour import validate_contour
 from tooldrawer_studio.tracing.models import TraceCandidate, TraceConfig
 
 
-def _polygon_area(points: list[Point2D]) -> float:
-    if len(points) < 3:
-        return 0.0
-    total = 0.0
-    for current, following in zip(points, points[1:] + points[:1]):
-        total += current.x_mm * following.y_mm - following.x_mm * current.y_mm
-    return abs(total) * 0.5
-
-
 def _distance_to_segment(point: Point2D, start: Point2D, end: Point2D) -> float:
     dx = end.x_mm - start.x_mm
     dy = end.y_mm - start.y_mm
@@ -165,6 +156,81 @@ def _global_foreground_mask(pixels_bgr: np.ndarray) -> np.ndarray:
     return mask
 
 
+def _known_distance_focus_line(
+    image: LoadedImage,
+    calibration: CalibrationRecord,
+) -> tuple[PixelPoint, PixelPoint] | None:
+    if calibration.method != "known_distance":
+        return None
+
+    matrix = np.asarray(calibration.matrix_3x3, dtype=np.float64)
+    try:
+        inverse = np.linalg.inv(matrix)
+    except np.linalg.LinAlgError:
+        return None
+
+    def map_mm(x_mm: float, y_mm: float) -> tuple[float, float] | None:
+        mapped = inverse @ np.array([x_mm, y_mm, 1.0], dtype=np.float64)
+        if abs(float(mapped[2])) < 1e-12:
+            return None
+        mapped /= mapped[2]
+        x_px = float(mapped[0])
+        y_px = float(mapped[1])
+        if not np.isfinite(x_px) or not np.isfinite(y_px):
+            return None
+        return x_px, y_px
+
+    origin = map_mm(0.0, 0.0)
+    one_mm = map_mm(1.0, 0.0)
+    if origin is None or one_mm is None:
+        return None
+    dx = one_mm[0] - origin[0]
+    dy = one_mm[1] - origin[1]
+    magnitude = hypot(dx, dy)
+    if magnitude <= 1e-12:
+        return None
+    dx /= magnitude
+    dy /= magnitude
+
+    height, width = image.pixels_bgr.shape[:2]
+    max_x = float(max(0, width - 1))
+    max_y = float(max(0, height - 1))
+    ox, oy = origin
+    intersections: list[tuple[float, float]] = []
+
+    if abs(dx) > 1e-12:
+        for x in (0.0, max_x):
+            t = (x - ox) / dx
+            y = oy + t * dy
+            if -1e-6 <= y <= max_y + 1e-6:
+                intersections.append((x, min(max(y, 0.0), max_y)))
+    if abs(dy) > 1e-12:
+        for y in (0.0, max_y):
+            t = (y - oy) / dy
+            x = ox + t * dx
+            if -1e-6 <= x <= max_x + 1e-6:
+                intersections.append((min(max(x, 0.0), max_x), y))
+
+    unique: list[tuple[float, float]] = []
+    for point in intersections:
+        if not any(hypot(point[0] - prior[0], point[1] - prior[1]) < 1e-6 for prior in unique):
+            unique.append(point)
+    if len(unique) < 2:
+        return None
+
+    first, second = max(
+        (
+            (a, b)
+            for index, a in enumerate(unique)
+            for b in unique[index + 1 :]
+        ),
+        key=lambda pair: hypot(pair[1][0] - pair[0][0], pair[1][1] - pair[0][1]),
+    )
+    if hypot(second[0] - first[0], second[1] - first[1]) < 12.0:
+        return None
+    return PixelPoint(*first), PixelPoint(*second)
+
+
 def _focus_line_mask(
     pixels_bgr: np.ndarray,
     focus_line_px: tuple[PixelPoint, PixelPoint],
@@ -192,11 +258,6 @@ def _focus_line_mask(
     ):
         return None
 
-    # The known-distance line is a strong clue in real capture workflows: users
-    # commonly measure the tool with a ruler or caliper, so the intended object
-    # crosses this line while the larger reference fixture surrounds it. Restrict
-    # GrabCut to a capsule around the line instead of allowing the fixture to win
-    # merely because it owns more pixels.
     half_width = int(
         round(max(8.0, min(0.09 * line_length, 0.22 * min(width, height))))
     )
@@ -335,9 +396,6 @@ def _focus_sort_key(
     midpoint_distance = float(polygon.distance(midpoint))
     overlap_length = float(polygon.intersection(line).length)
     contains_midpoint = 0.0 if polygon.buffer(1e-9).covers(midpoint) else 1.0
-    # Prefer a contour containing the line midpoint, then one that follows more of
-    # the calibration line, then the closest/smaller contour. This keeps a compact
-    # tool ahead of a larger ruler/caliper fixture when both are visible.
     return (
         contains_midpoint,
         -overlap_length,
@@ -375,10 +433,14 @@ class OpenCVTracer:
 
         global_mask = _global_foreground_mask(image.pixels_bgr)
         global_candidates = _candidates_from_mask(global_mask, calibration, config)
-        if focus_line_px is None:
+
+        effective_focus = focus_line_px
+        if effective_focus is None:
+            effective_focus = _known_distance_focus_line(image, calibration)
+        if effective_focus is None:
             return global_candidates
 
-        focused_mask = _focus_line_mask(image.pixels_bgr, focus_line_px)
+        focused_mask = _focus_line_mask(image.pixels_bgr, effective_focus)
         if focused_mask is None:
             return global_candidates
         focused_candidates = _candidates_from_mask(focused_mask, calibration, config)
@@ -387,15 +449,12 @@ class OpenCVTracer:
 
         focused_candidates.sort(
             key=lambda candidate: _focus_sort_key(
-                candidate, calibration, focus_line_px
+                candidate, calibration, effective_focus
             )
         )
         primary = focused_candidates[0]
         ordered: list[TraceCandidate] = [primary]
 
-        # Keep genuinely separate global candidates for multi-tool photos, but do
-        # not duplicate the focused object merely because the two segmenters found
-        # slightly different versions of the same silhouette.
         for candidate in global_candidates:
             if _overlap_fraction(primary, candidate) >= 0.75:
                 continue
