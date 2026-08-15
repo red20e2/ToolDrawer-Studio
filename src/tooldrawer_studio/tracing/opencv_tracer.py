@@ -4,10 +4,14 @@ from math import hypot
 
 import cv2
 import numpy as np
+from shapely import make_valid
+from shapely.geometry import GeometryCollection, MultiPolygon, Polygon
+from shapely.geometry.base import BaseGeometry
 
 from tooldrawer_studio.calibration.service import PixelPoint, pixel_to_mm
 from tooldrawer_studio.capture.image_loader import LoadedImage
 from tooldrawer_studio.domain.models import CalibrationRecord, Point2D
+from tooldrawer_studio.geometry.contour import validate_contour
 from tooldrawer_studio.tracing.models import TraceCandidate, TraceConfig
 
 
@@ -70,6 +74,58 @@ def _simplify_closed(points: list[Point2D], epsilon: float) -> list[Point2D]:
         if not deduped or point != deduped[-1]:
             deduped.append(point)
     return deduped if len(deduped) >= 3 else list(points)
+
+
+def _polygon_components(geometry: BaseGeometry) -> list[Polygon]:
+    if isinstance(geometry, Polygon):
+        return [geometry]
+    if isinstance(geometry, MultiPolygon):
+        return list(geometry.geoms)
+    if isinstance(geometry, GeometryCollection):
+        components: list[Polygon] = []
+        for item in geometry.geoms:
+            components.extend(_polygon_components(item))
+        return components
+    return []
+
+
+def _valid_contour_components(points: list[Point2D]) -> list[tuple[list[Point2D], float]]:
+    coordinates = [(float(point.x_mm), float(point.y_mm)) for point in points]
+    if len(set(coordinates)) < 3:
+        return []
+
+    polygon = Polygon(coordinates)
+    geometry: BaseGeometry = polygon if polygon.is_valid else make_valid(polygon)
+    components = [
+        component
+        for component in _polygon_components(geometry)
+        if not component.is_empty and component.area > 1e-6
+    ]
+    components.sort(
+        key=lambda component: (
+            component.area,
+            component.bounds[0],
+            component.bounds[1],
+            component.bounds[2],
+            component.bounds[3],
+            component.wkb_hex,
+        ),
+        reverse=True,
+    )
+
+    repaired: list[tuple[list[Point2D], float]] = []
+    for component in components:
+        exterior = list(component.exterior.coords)
+        contour = [
+            Point2D(x_mm=float(x), y_mm=float(y))
+            for x, y in exterior[:-1]
+        ]
+        try:
+            validate_contour(contour)
+        except ValueError:
+            continue
+        repaired.append((contour, float(component.area)))
+    return repaired
 
 
 def _border_foreground_count(mask: np.ndarray) -> int:
@@ -136,10 +192,10 @@ class OpenCVTracer:
                 )
                 for vertex in pixel_vertices
             ]
-            area_mm2 = _polygon_area(mm_points)
-            if area_mm2 < config.min_area_mm2:
-                continue
             simplified = _simplify_closed(mm_points, config.simplify_mm)
+            components = _valid_contour_components(simplified)
+            if not components:
+                components = _valid_contour_components(mm_points)
             touches_border = any(
                 int(vertex[0]) <= 0
                 or int(vertex[1]) <= 0
@@ -147,18 +203,21 @@ class OpenCVTracer:
                 or int(vertex[1]) >= height - 1
                 for vertex in pixel_vertices
             )
-            confidence = 1.0
-            if touches_border:
-                confidence -= 0.35
-            if len(simplified) < 4:
-                confidence -= 0.15
-            confidence = max(0.0, min(1.0, confidence))
-            candidates.append(
-                TraceCandidate(
-                    base_contour_mm=simplified,
-                    confidence=confidence,
-                    area_mm2=area_mm2,
+            for repaired_contour, area_mm2 in components:
+                if area_mm2 < config.min_area_mm2:
+                    continue
+                confidence = 1.0
+                if touches_border:
+                    confidence -= 0.35
+                if len(repaired_contour) < 4:
+                    confidence -= 0.15
+                confidence = max(0.0, min(1.0, confidence))
+                candidates.append(
+                    TraceCandidate(
+                        base_contour_mm=repaired_contour,
+                        confidence=confidence,
+                        area_mm2=area_mm2,
+                    )
                 )
-            )
         candidates.sort(key=lambda candidate: candidate.area_mm2, reverse=True)
         return candidates
