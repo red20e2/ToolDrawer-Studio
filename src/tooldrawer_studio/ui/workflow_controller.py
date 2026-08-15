@@ -26,6 +26,7 @@ from tooldrawer_studio.capture.image_loader import (
 )
 from tooldrawer_studio.domain.models import CalibrationRecord, Point2D, Project, ToolObject
 from tooldrawer_studio.export.service import (
+    DEFAULT_ORGANIZER_EXPORT_FORMATS,
     ExportPaths,
     OrganizerExportPaths,
     export_organizer_package,
@@ -929,7 +930,7 @@ class WorkflowController:
         if not self.generation_is_current() or self._generation_result is None:
             raise ValueError("Generate the current organizer before exporting")
         requested = (
-            frozenset({"step", "stl", "dxf"})
+            DEFAULT_ORGANIZER_EXPORT_FORMATS
             if formats is None
             else frozenset(formats)
         )

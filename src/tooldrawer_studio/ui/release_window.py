@@ -176,7 +176,13 @@ class ReleaseMainWindow(MainWindow):
                 paths = self.controller.export_organizer(path, formats)
                 exported = [
                     str(exported_path)
-                    for exported_path in (paths.step, paths.stl, paths.dxf)
+                    for exported_path in (
+                        paths.step,
+                        paths.stl,
+                        paths.dxf,
+                        paths.svg,
+                        paths.pdf,
+                    )
                     if exported_path is not None
                 ]
                 self.export_status.setText("Exported:\n" + "\n".join(exported))

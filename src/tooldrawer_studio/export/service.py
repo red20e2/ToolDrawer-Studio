@@ -7,9 +7,10 @@ from typing import TYPE_CHECKING
 import cadquery as cq
 
 from tooldrawer_studio.domain.models import Project, ToolObject
-from tooldrawer_studio.generation.gridfinity import PROFILE
+from tooldrawer_studio.export.profiles import organizer_profile_loops
+from tooldrawer_studio.export.svg import export_organizer_svg
+from tooldrawer_studio.export.verification import export_organizer_pdf
 from tooldrawer_studio.geometry.pocket import tool_profile
-from tooldrawer_studio.layout.geometry import oriented_cavity_polygon
 
 if TYPE_CHECKING:
     from tooldrawer_studio.generation.builder import GenerationResult
@@ -22,11 +23,17 @@ class ExportPaths:
     dxf: Path
 
 
+ORGANIZER_EXPORT_FORMATS = frozenset({"step", "stl", "dxf", "svg", "pdf"})
+DEFAULT_ORGANIZER_EXPORT_FORMATS = ORGANIZER_EXPORT_FORMATS
+
+
 @dataclass(frozen=True, slots=True)
 class OrganizerExportPaths:
     step: Path | None = None
     stl: Path | None = None
     dxf: Path | None = None
+    svg: Path | None = None
+    pdf: Path | None = None
 
 
 def export_step(model: cq.Workplane, path: Path) -> Path:
@@ -84,47 +91,9 @@ def _dxf_polyline(layer: str, coordinates: list[tuple[float, float]]) -> list[st
     return lines
 
 
-def _organizer_outer_boundary(project: Project) -> list[tuple[float, float]]:
-    layout = project.layout
-    if layout is None:
-        raise ValueError("Configure an Arrange layout before exporting DXF")
-    if layout.mode == "gridfinity":
-        gap = PROFILE.pitch_mm - PROFILE.top_footprint_mm
-        inset = gap / 2.0
-        minx = inset
-        miny = inset
-        maxx = layout.width_mm - inset
-        maxy = layout.height_mm - inset
-    else:
-        minx = 0.0
-        miny = 0.0
-        maxx = layout.width_mm
-        maxy = layout.height_mm
-    return [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)]
-
-
 def export_organizer_dxf(project: Project, path: Path) -> Path:
-    layout = project.layout
-    if layout is None:
-        raise ValueError("Configure an Arrange layout before exporting DXF")
-    tools = {tool.id: tool for tool in project.tools}
-    entities: list[tuple[str, list[tuple[float, float]]]] = [
-        ("OUTER_BOUNDARY", _organizer_outer_boundary(project))
-    ]
-    cavity_index = 0
-    for placement in sorted(layout.placements, key=lambda item: item.tool_id):
-        if not placement.is_placed:
-            continue
-        tool = tools.get(placement.tool_id)
-        if tool is None:
-            raise ValueError(f"Placement references missing tool: {placement.tool_id}")
-        cavity_index += 1
-        polygon = oriented_cavity_polygon(tool, placement)
-        coordinates = [
-            (float(x), float(y)) for x, y in list(polygon.exterior.coords)[:-1]
-        ]
-        entities.append((f"CAVITY_{cavity_index:03d}", coordinates))
-
+    loops = organizer_profile_loops(project)
+    entities = [(loop.layer, list(loop.coordinates)) for loop in loops]
     layer_names = [layer for layer, _coordinates in entities]
     lines = [
         "0",
@@ -164,9 +133,9 @@ def export_organizer_package(
     result: GenerationResult,
     project: Project,
     directory: Path,
-    formats: frozenset[str] = frozenset({"step", "stl", "dxf"}),
+    formats: frozenset[str] = DEFAULT_ORGANIZER_EXPORT_FORMATS,
 ) -> OrganizerExportPaths:
-    unknown = formats.difference({"step", "stl", "dxf"})
+    unknown = formats.difference(ORGANIZER_EXPORT_FORMATS)
     if unknown:
         raise ValueError(f"Unknown organizer export format(s): {', '.join(sorted(unknown))}")
     if not formats:
@@ -187,6 +156,16 @@ def export_organizer_package(
         dxf=(
             export_organizer_dxf(project, directory / f"{stem}.dxf")
             if "dxf" in formats
+            else None
+        ),
+        svg=(
+            export_organizer_svg(project, directory / f"{stem}.svg")
+            if "svg" in formats
+            else None
+        ),
+        pdf=(
+            export_organizer_pdf(project, directory / f"{stem}.pdf")
+            if "pdf" in formats
             else None
         ),
     )

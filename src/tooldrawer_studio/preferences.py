@@ -9,7 +9,7 @@ from tooldrawer_studio.app_paths import preferences_path
 MAX_RECENT_PROJECTS = 10
 
 
-def _absolute_directory(value: object) -> str | None:
+def _absolute_path(value: object) -> str | None:
     if not isinstance(value, str) or not value:
         return None
     candidate = Path(value).expanduser()
@@ -24,6 +24,11 @@ class Preferences:
     project_directory: str | None = None
     export_directory: str | None = None
     photo_import_directory: str | None = None
+    orca_slicer_path: str | None = None
+    freecad_path: str | None = None
+    custom_handoff_name: str | None = None
+    custom_handoff_executable: str | None = None
+    custom_handoff_format: str = "dxf"
 
     @classmethod
     def load(cls) -> "Preferences":
@@ -51,11 +56,23 @@ class Preferences:
                 if len(recent) >= MAX_RECENT_PROJECTS:
                     break
 
+        format_value = payload.get("custom_handoff_format", "dxf")
+        custom_format = (
+            str(format_value)
+            if format_value in {"step", "stl", "dxf", "svg", "pdf"}
+            else "dxf"
+        )
+        name = payload.get("custom_handoff_name")
         return cls(
             recent_projects=recent,
-            project_directory=_absolute_directory(payload.get("project_directory")),
-            export_directory=_absolute_directory(payload.get("export_directory")),
-            photo_import_directory=_absolute_directory(payload.get("photo_import_directory")),
+            project_directory=_absolute_path(payload.get("project_directory")),
+            export_directory=_absolute_path(payload.get("export_directory")),
+            photo_import_directory=_absolute_path(payload.get("photo_import_directory")),
+            orca_slicer_path=_absolute_path(payload.get("orca_slicer_path")),
+            freecad_path=_absolute_path(payload.get("freecad_path")),
+            custom_handoff_name=str(name) if isinstance(name, str) and name.strip() else None,
+            custom_handoff_executable=_absolute_path(payload.get("custom_handoff_executable")),
+            custom_handoff_format=custom_format,
         )
 
     def add_recent_project(self, path: Path) -> None:

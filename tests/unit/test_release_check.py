@@ -10,7 +10,7 @@ def test_release_check_generates_both_modes_and_all_exports(tmp_path):
     for mode in ("foam", "gridfinity"):
         directory = tmp_path / mode
         files = {path.suffix.lower(): path for path in directory.iterdir() if path.is_file()}
-        assert {".step", ".stl", ".dxf"}.issubset(files)
+        assert {".step", ".stl", ".dxf", ".svg", ".pdf"}.issubset(files)
         assert all(path.stat().st_size > 0 for path in files.values())
 
 

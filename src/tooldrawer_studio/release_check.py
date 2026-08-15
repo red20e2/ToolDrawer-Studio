@@ -32,7 +32,7 @@ def run_release_check(output_dir: Path) -> int:
             bundle = build_release_fixture(mode)
             result = generate_organizer(bundle.project)
             paths = export_organizer_package(result, bundle.project, root / mode)
-            for path in (paths.step, paths.stl, paths.dxf):
+            for path in (paths.step, paths.stl, paths.dxf, paths.svg, paths.pdf):
                 if path is None or not path.is_file() or path.stat().st_size <= 0:
                     raise RuntimeError(f"{mode} export missing")
         print("self-test-ok")

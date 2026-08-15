@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tempfile
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QPixmap
@@ -39,12 +40,15 @@ from tooldrawer_studio.capture.phone_server import PhoneUploadServer
 from tooldrawer_studio.capture.phone_session import PhoneSession
 from tooldrawer_studio.capture.webcam import WebcamCaptureService
 from tooldrawer_studio.domain.models import CalibrationRecord, Point2D, ToolObject
+from tooldrawer_studio.export.service import DEFAULT_ORGANIZER_EXPORT_FORMATS
+from tooldrawer_studio.preferences import Preferences
 from tooldrawer_studio.ui.arrange_panel import ArrangePanel
 from tooldrawer_studio.ui.arrangement_view import ArrangementView
 from tooldrawer_studio.ui.calibration_view import CalibrationImageView
 from tooldrawer_studio.ui.capture_tray import CaptureTrayWidget, qr_image
 from tooldrawer_studio.ui.contour_editor import ContourEditor
 from tooldrawer_studio.ui.generate_panel import GeneratePanel
+from tooldrawer_studio.ui.handoff_dialog import HandoffDialog
 from tooldrawer_studio.ui.measure_panel import MeasurePanel
 from tooldrawer_studio.ui.model_preview import ModelPreview
 from tooldrawer_studio.ui.theme import apply_theme, mark_primary, muted_label, stage_header
@@ -426,11 +430,15 @@ class MainWindow(QMainWindow):
         self.export_step_button = QPushButton("Export STEP")
         self.export_stl_button = QPushButton("Export STL")
         self.export_dxf_button = QPushButton("Export DXF")
+        self.export_svg_button = QPushButton("Export 1:1 SVG")
+        self.export_pdf_button = QPushButton("Export 1:1 PDF")
         self.export_all_button = mark_primary(QPushButton("Export All"))
         for button in (
             self.export_step_button,
             self.export_stl_button,
             self.export_dxf_button,
+            self.export_svg_button,
+            self.export_pdf_button,
             self.export_all_button,
         ):
             button.setEnabled(False)
@@ -443,8 +451,14 @@ class MainWindow(QMainWindow):
         self.export_dxf_button.clicked.connect(
             lambda: self._export_generated_files({"dxf"})
         )
+        self.export_svg_button.clicked.connect(
+            lambda: self._export_generated_files({"svg"})
+        )
+        self.export_pdf_button.clicked.connect(
+            lambda: self._export_generated_files({"pdf"})
+        )
         self.export_all_button.clicked.connect(
-            lambda: self._export_generated_files({"step", "stl", "dxf"})
+            lambda: self._export_generated_files(set(DEFAULT_ORGANIZER_EXPORT_FORMATS))
         )
         row = QHBoxLayout()
         row.addWidget(self.export_step_button)
@@ -453,9 +467,45 @@ class MainWindow(QMainWindow):
         row.addWidget(self.export_all_button)
         row.addStretch()
         export_layout.addLayout(row)
+        verify_row = QHBoxLayout()
+        verify_row.addWidget(self.export_svg_button)
+        verify_row.addWidget(self.export_pdf_button)
+        verify_row.addStretch()
+        export_layout.addLayout(verify_row)
+        export_layout.addWidget(
+            muted_label("1:1 SVG/PDF are true-scale paper checks. Print at 100% / do not scale.")
+        )
+
+        handoff_box = QGroupBox("Open in other apps")
+        handoff_layout = QVBoxLayout(handoff_box)
+        handoff_layout.addWidget(
+            muted_label("Launches a local app with the matching export. Detection is optional; set a path if needed.")
+        )
+        self.open_orca_button = QPushButton("Open STL in OrcaSlicer")
+        self.open_freecad_button = QPushButton("Open STEP in FreeCAD")
+        self.open_custom_button = QPushButton("Open in CNC / laser")
+        self.configure_handoff_button = QPushButton("Configure Handoff…")
+        for button in (
+            self.open_orca_button,
+            self.open_freecad_button,
+            self.open_custom_button,
+        ):
+            button.setEnabled(False)
+        self.open_orca_button.clicked.connect(lambda: self._handoff("orca_slicer"))
+        self.open_freecad_button.clicked.connect(lambda: self._handoff("freecad"))
+        self.open_custom_button.clicked.connect(lambda: self._handoff("custom"))
+        self.configure_handoff_button.clicked.connect(self._configure_handoff)
+        handoff_row = QHBoxLayout()
+        handoff_row.addWidget(self.open_orca_button)
+        handoff_row.addWidget(self.open_freecad_button)
+        handoff_row.addWidget(self.open_custom_button)
+        handoff_row.addWidget(self.configure_handoff_button)
+        handoff_row.addStretch()
+        handoff_layout.addLayout(handoff_row)
         self.export_status = muted_label("No manufacturing export yet")
         export_layout.addWidget(self.export_status)
         layout.addWidget(export_box)
+        layout.addWidget(handoff_box)
         layout.addStretch()
         return page
 
@@ -522,7 +572,12 @@ class MainWindow(QMainWindow):
             self.export_step_button,
             self.export_stl_button,
             self.export_dxf_button,
+            self.export_svg_button,
+            self.export_pdf_button,
             self.export_all_button,
+            self.open_orca_button,
+            self.open_freecad_button,
+            self.open_custom_button,
         )
         if layout is None:
             self.model_preview.clear_model()
@@ -1424,13 +1479,66 @@ class MainWindow(QMainWindow):
         if not directory:
             return
         try:
-            paths = self.controller.export_organizer(Path(directory), formats)
+            path = Path(directory)
+            paths = self.controller.export_organizer(path, formats)
             exported = [
-                str(path)
-                for path in (paths.step, paths.stl, paths.dxf)
-                if path is not None
+                str(exported_path)
+                for exported_path in (
+                    paths.step,
+                    paths.stl,
+                    paths.dxf,
+                    paths.svg,
+                    paths.pdf,
+                )
+                if exported_path is not None
             ]
             self.export_status.setText("Exported:\n" + "\n".join(exported))
+        except Exception as exc:
+            self._show_error(exc)
+
+    def _preferences(self) -> Preferences:
+        existing = getattr(self, "preferences", None)
+        if isinstance(existing, Preferences):
+            return existing
+        preferences = Preferences.load()
+        self.preferences = preferences
+        return preferences
+
+    def _handoff_directory(self) -> Path:
+        prefs = self._preferences()
+        if prefs.export_directory:
+            return Path(prefs.export_directory)
+        return Path(tempfile.mkdtemp(prefix="tooldrawer-handoff-"))
+
+    def _configure_handoff(self) -> None:
+        preferences = self._preferences()
+        dialog = HandoffDialog(preferences, self)
+        if dialog.exec():
+            dialog.apply_to(preferences)
+            preferences.save()
+            custom_name = preferences.custom_handoff_name or "CNC / laser"
+            self.open_custom_button.setText(f"Open in {custom_name}")
+
+    def _handoff(self, key: str) -> None:
+        try:
+            from tooldrawer_studio.integrations.handoff import (
+                launch_document,
+                resolve_handoff_target,
+            )
+
+            target = resolve_handoff_target(key, self._preferences())
+            if target.executable is None:
+                raise ValueError(
+                    f"{target.label} was not found. Use Configure Handoff to set the application path."
+                )
+            paths = self.controller.export_organizer(
+                self._handoff_directory(), {target.preferred_format}
+            )
+            document = getattr(paths, target.preferred_format)
+            if document is None:
+                raise ValueError(f"Could not export {target.preferred_format} for {target.label}")
+            launch_document(target.executable, document)
+            self.export_status.setText(f"Opened {document} in {target.label}")
         except Exception as exc:
             self._show_error(exc)
 
