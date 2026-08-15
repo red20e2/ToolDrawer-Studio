@@ -283,6 +283,7 @@ def _focus_color_mask(
     selected_key: tuple[float, float, float, float, int] | None = None
     color_attempted = False
     previous_color_seed: np.ndarray | None = None
+    viable_component_seed = np.zeros((height, width), dtype=np.uint8)
     minimum_overlap = max(12.0, 0.15 * line_length)
     for saturation_threshold in thresholds:
         color_seed = np.where(
@@ -297,7 +298,6 @@ def _focus_color_mask(
             color_seed, previous_color_seed
         ):
             continue
-        higher_threshold_seed = previous_color_seed
         previous_color_seed = color_seed
         if color_pixel_count < 20:
             continue
@@ -318,8 +318,8 @@ def _focus_color_mask(
                 left : left + component_width,
             ]
             component_mask = labels[component_bounds] == label
-            if higher_threshold_seed is not None and np.any(
-                higher_threshold_seed[component_bounds][component_mask] != 0
+            if np.any(
+                viable_component_seed[component_bounds][component_mask] != 0
             ):
                 continue
             local_ys, local_xs = np.nonzero(component_mask)
@@ -352,6 +352,8 @@ def _focus_color_mask(
                 or hue_coherence < 0.75
             ):
                 continue
+            viable_view = viable_component_seed[component_bounds]
+            viable_view[component_mask] = 255
             cross_distance = abs(float(cross_positions.mean()))
             key = (axis_overlap, -cross_distance, axis_span, elongation, area)
             if selected_key is None or key > selected_key:

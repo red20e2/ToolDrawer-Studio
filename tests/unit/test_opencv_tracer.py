@@ -235,6 +235,28 @@ def test_focus_line_returns_six_saturation_blue_pen_without_corridor_fallback(
     assert not polygon.covers(Point(195.0, 0.0))
 
 
+def test_focus_line_ignores_saturated_fleck_inside_six_saturation_pen(
+    tmp_path: Path,
+):
+    focus_line = (PixelPoint(105.0, 215.0), PixelPoint(495.0, 215.0))
+    pixels, pen_mask = _focused_pen_fixture(
+        (186, 183, 182), neutral_reference=True
+    )
+    cv2.rectangle(pixels, (298, 213), (302, 217), (25, 25, 210), -1)
+
+    first = _trace_focused_pen(
+        tmp_path,
+        pixels,
+        "six-saturation-pen-with-saturated-fleck.png",
+        focus_line,
+    )
+    polygon, candidate_mask = _candidate_polygon_and_mask(first, focus_line)
+
+    assert polygon.is_valid
+    assert _mask_iou(candidate_mask, pen_mask) >= 0.94
+    assert polygon.covers(Point(195.0, 0.0))
+
+
 def test_focus_line_ignores_saturated_caliper_marking(tmp_path: Path):
     pixels, pen_mask = _focused_pen_fixture(
         (168, 72, 24), saturated_marking=True
