@@ -88,6 +88,9 @@ class ContourEditor(QWidget):
         self._contour = list(tool.contour_mm)
         validate_contour(self._base_contour)
         validate_contour(self._contour)
+        image_bytes, calibration = self._resolve_source_context(
+            tool, image_bytes, calibration
+        )
         self._source_pixmap = None
         if image_bytes is not None:
             pixmap = QPixmap()
@@ -98,6 +101,30 @@ class ContourEditor(QWidget):
         self.undo_stack.clear()
         self._redraw()
         self.fit_to_tool()
+
+    def _resolve_source_context(
+        self,
+        tool: ToolObject,
+        image_bytes: bytes | None,
+        calibration: CalibrationRecord | None,
+    ) -> tuple[bytes | None, CalibrationRecord | None]:
+        if image_bytes is not None and calibration is not None:
+            return image_bytes, calibration
+        host = self.window()
+        controller = getattr(host, "controller", None)
+        if controller is None:
+            return image_bytes, calibration
+        if image_bytes is None:
+            try:
+                image_bytes = controller.capture_display_bytes(tool.source_capture_id)
+            except (KeyError, ValueError):
+                image_bytes = None
+        if calibration is None:
+            try:
+                calibration = controller.calibration_for_capture(tool.source_capture_id)
+            except (KeyError, ValueError):
+                calibration = None
+        return image_bytes, calibration
 
     def contour(self) -> list[Point2D]:
         return list(self._contour)
