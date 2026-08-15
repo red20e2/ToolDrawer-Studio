@@ -15,5 +15,9 @@ def test_windows_pr_workflow_has_release_packaging_steps():
     assert "Toolchain versions" in text
     assert "Build release artifacts" in text
     assert "build_artifacts.ps1" in text
-    assert "Upload Windows release artifacts" in text
-    assert "artifacts/" in text
+    assert "Upload Windows installer" in text
+    assert "Upload Windows portable build" in text
+    assert "Upload checksums" in text
+    assert "artifacts/ToolDrawer-Studio-*-Setup.exe" in text
+    assert "artifacts/ToolDrawer-Studio-*-Portable.zip" in text
+    assert "artifacts/SHA256SUMS.txt" in text
