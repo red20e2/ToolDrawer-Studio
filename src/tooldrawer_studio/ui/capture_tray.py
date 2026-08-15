@@ -6,6 +6,7 @@ import qrcode
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QImage, QPixmap
 from PySide6.QtWidgets import (
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from tooldrawer_studio.capture.pending import CaptureSessionService
+from tooldrawer_studio.ui.theme import mark_danger, mark_primary
 
 
 def qr_image(url: str, scale: int = 6) -> QImage:
@@ -59,14 +61,18 @@ class CaptureTrayWidget(QWidget):
         self._service = service
         self._promote_callback: Callable[[str], None] | None = None
 
-        layout = QHBoxLayout(self)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        box = QGroupBox("Pending captures")
+        inner = QHBoxLayout(box)
         self.list_widget = QListWidget()
         self.list_widget.setMinimumWidth(220)
         self.list_widget.currentItemChanged.connect(self._selection_changed)
-        layout.addWidget(self.list_widget, 1)
+        inner.addWidget(self.list_widget, 1)
 
         preview_layout = QVBoxLayout()
         self.preview_label = QLabel("No pending captures")
+        self.preview_label.setObjectName("imageWell")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setMinimumSize(240, 180)
         self.preview_label.setScaledContents(False)
@@ -74,8 +80,8 @@ class CaptureTrayWidget(QWidget):
 
         actions = QHBoxLayout()
         self.rotate_button = QPushButton("Rotate 90°")
-        self.delete_button = QPushButton("Delete")
-        self.promote_button = QPushButton("Add to Project")
+        self.delete_button = mark_danger(QPushButton("Delete"))
+        self.promote_button = mark_primary(QPushButton("Add to Project"))
         self.rotate_button.clicked.connect(self._rotate_selected)
         self.delete_button.clicked.connect(self._delete_selected)
         self.promote_button.clicked.connect(self._promote_selected)
@@ -83,7 +89,8 @@ class CaptureTrayWidget(QWidget):
         actions.addWidget(self.delete_button)
         actions.addWidget(self.promote_button)
         preview_layout.addLayout(actions)
-        layout.addLayout(preview_layout, 2)
+        inner.addLayout(preview_layout, 2)
+        layout.addWidget(box)
 
         self._set_actions_enabled(False)
         self.refresh()

@@ -7,6 +7,7 @@ from tooldrawer_studio.calibration.service import (
     calibrate_known_object,
     calibrate_paper,
     calibrate_rectangle,
+    mm_to_pixel,
     pixel_to_mm,
 )
 
@@ -131,3 +132,45 @@ def test_calibration_rejects_degenerate_inputs():
             0.0,
             10.0,
         )
+
+
+def test_rectangle_calibration_records_near_zero_corner_residual():
+    record = calibrate_rectangle(
+        "capture-1",
+        (
+            PixelPoint(0.0, 0.0),
+            PixelPoint(850.0, 0.0),
+            PixelPoint(850.0, 1100.0),
+            PixelPoint(0.0, 1100.0),
+        ),
+        215.9,
+        279.4,
+    )
+    assert record.residual_mm == pytest.approx(0.0, abs=1e-4)
+    assert record.confidence >= 0.9
+
+
+def test_perspective_paper_maps_known_size_with_near_zero_residual():
+    corners = (
+        PixelPoint(80.0, 40.0),
+        PixelPoint(720.0, 90.0),
+        PixelPoint(690.0, 980.0),
+        PixelPoint(50.0, 920.0),
+    )
+    record = calibrate_paper("capture-1", corners, A4)
+
+    assert record.residual_mm == pytest.approx(0.0, abs=1e-3)
+    mapped = pixel_to_mm(record, corners[2])
+    assert mapped.x_mm == pytest.approx(A4.width_mm, abs=1e-3)
+    assert mapped.y_mm == pytest.approx(A4.height_mm, abs=1e-3)
+    round_trip = mm_to_pixel(record, mapped)
+    assert round_trip.x_px == pytest.approx(corners[2].x_px, abs=1e-3)
+    assert round_trip.y_px == pytest.approx(corners[2].y_px, abs=1e-3)
+
+
+def test_known_distance_residual_is_near_zero_on_the_reference_span():
+    record = calibrate_known_distance(
+        "capture-1", PixelPoint(10.0, 10.0), PixelPoint(110.0, 10.0), 50.0
+    )
+    assert record.residual_mm == pytest.approx(0.0, abs=1e-6)
+    assert record.method == "known_distance"

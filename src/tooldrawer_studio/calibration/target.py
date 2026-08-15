@@ -176,13 +176,16 @@ def _candidate_centers(image: LoadedImage) -> list[tuple[np.ndarray, float]]:
 
 
 def detect_target(image: LoadedImage, spec: CalibrationTargetSpec) -> DetectedTarget:
-    del spec  # Detection is geometric; the spec supplies physical dimensions after detection.
     candidates = _candidate_centers(image)
     if len(candidates) < 4:
         raise ValueError("Could not detect four calibration target fiducials")
 
+    expected_aspect = (spec.paper.width_mm - 2.0 * spec.inset_mm) / (
+        spec.paper.height_mm - 2.0 * spec.inset_mm
+    )
     best_points: np.ndarray | None = None
     best_scores: tuple[float, ...] | None = None
+    best_rank = -1.0
     best_area = -1.0
     for indexes in combinations(range(len(candidates)), 4):
         points = np.array([candidates[index][0] for index in indexes], dtype=np.float32)
@@ -190,7 +193,15 @@ def detect_target(image: LoadedImage, spec: CalibrationTargetSpec) -> DetectedTa
         if len(hull) != 4:
             continue
         area = abs(float(cv2.contourArea(hull)))
-        if area > best_area:
+        width = float(np.ptp(points[:, 0]))
+        height = float(np.ptp(points[:, 1]))
+        if height <= 1e-6:
+            continue
+        aspect = width / height
+        aspect_penalty = abs(np.log(max(aspect, 1e-6) / expected_aspect))
+        rank = area * float(np.exp(-2.0 * aspect_penalty))
+        if rank > best_rank:
+            best_rank = rank
             best_area = area
             best_points = points
             best_scores = tuple(candidates[index][1] for index in indexes)

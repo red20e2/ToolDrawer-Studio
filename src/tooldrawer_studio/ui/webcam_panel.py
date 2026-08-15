@@ -7,6 +7,7 @@ from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from tooldrawer_studio.capture.webcam import WebcamCaptureService
+from tooldrawer_studio.ui.theme import mark_primary
 
 
 class WebcamPanel(QWidget):
@@ -30,13 +32,18 @@ class WebcamPanel(QWidget):
         self._on_capture = on_capture
         self._camera_open = False
 
-        layout = QVBoxLayout(self)
+        box = QGroupBox("Webcam")
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(12, 12, 12, 12)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(box)
         controls = QHBoxLayout()
         self.camera_combo = QComboBox()
         self.refresh_button = QPushButton("Refresh Cameras")
         self.open_button = QPushButton("Open Camera")
         self.open_button.setEnabled(False)
-        self.capture_button = QPushButton("Capture")
+        self.capture_button = mark_primary(QPushButton("Capture"))
         self.capture_button.setEnabled(False)
         controls.addWidget(self.camera_combo, 1)
         controls.addWidget(self.refresh_button)
@@ -51,6 +58,7 @@ class WebcamPanel(QWidget):
         self.preview_label = QLabel("Camera preview")
         self.preview_label.setMinimumSize(320, 220)
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setObjectName("imageWell")
         layout.addWidget(self.preview_label, 1)
 
         self.preview_timer = QTimer(self)

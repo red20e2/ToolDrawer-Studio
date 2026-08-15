@@ -7,52 +7,23 @@ import cv2
 import numpy as np
 
 from tooldrawer_studio.domain.models import CalibrationRecord
+from tooldrawer_studio.image_analysis import (
+    contour_contrast,
+    foreground_mask,
+    lighting_normalize,
+    min_area_rect_elongation,
+)
 from tooldrawer_studio.measurement.models import ImagePoint, ThicknessMeasurementResult
 
 
 @dataclass(frozen=True, slots=True)
-class _Candidate:
+class SilhouetteCandidate:
     area_px2: float
     contour: np.ndarray
     touches_boundary: bool
-
-
-def _threshold_masks(pixels_bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    gray = cv2.cvtColor(pixels_bgr, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    _, light = cv2.threshold(
-        blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-    )
-    return light, cv2.bitwise_not(light)
-
-
-def _candidate_contours(pixels_bgr: np.ndarray) -> list[_Candidate]:
-    height, width = pixels_bgr.shape[:2]
-    image_area = float(width * height)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    candidates: list[_Candidate] = []
-
-    for threshold in _threshold_masks(pixels_bgr):
-        cleaned = cv2.morphologyEx(threshold, cv2.MORPH_OPEN, kernel)
-        cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
-        contours, _ = cv2.findContours(
-            cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
-        )
-        for contour in contours:
-            area = abs(float(cv2.contourArea(contour)))
-            if area < image_area * 0.005 or area > image_area * 0.85:
-                continue
-            points = contour[:, 0, :]
-            touches = bool(
-                np.any(points[:, 0] <= 0)
-                or np.any(points[:, 1] <= 0)
-                or np.any(points[:, 0] >= width - 1)
-                or np.any(points[:, 1] >= height - 1)
-            )
-            candidates.append(_Candidate(area, contour, touches))
-
-    candidates.sort(key=lambda candidate: candidate.area_px2, reverse=True)
-    return candidates
+    elongation: float
+    contrast: float
+    score: float
 
 
 def _map_pixels_to_mm(
@@ -134,16 +105,6 @@ def _maximum_cross_section(
     return largest, best[1], best[2], peak_stability
 
 
-def _contrast_delta(gray: np.ndarray, contour: np.ndarray) -> float:
-    selected = np.zeros(gray.shape, dtype=np.uint8)
-    cv2.drawContours(selected, [contour], -1, 255, thickness=cv2.FILLED)
-    foreground = gray[selected > 0]
-    background = gray[selected == 0]
-    if foreground.size == 0 or background.size == 0:
-        return 0.0
-    return abs(float(foreground.mean()) - float(background.mean()))
-
-
 def _silhouette_points(contour: np.ndarray) -> tuple[ImagePoint, ...]:
     simplified = cv2.approxPolyDP(contour, 1.0, True)
     return tuple(
@@ -151,24 +112,84 @@ def _silhouette_points(contour: np.ndarray) -> tuple[ImagePoint, ...]:
     )
 
 
+def _point_to_contour_distance(point: ImagePoint, contour: np.ndarray) -> float:
+    distance = cv2.pointPolygonTest(
+        contour, (float(point.x_px), float(point.y_px)), True
+    )
+    if distance >= 0:
+        return 0.0
+    return abs(float(distance))
+
+
 class ThicknessMeasurementService:
-    def measure(
-        self, pixels_bgr: np.ndarray, calibration: CalibrationRecord
-    ) -> ThicknessMeasurementResult:
+    def candidates(self, pixels_bgr: np.ndarray) -> list[SilhouetteCandidate]:
         if (
             pixels_bgr.ndim != 3
             or pixels_bgr.shape[2] != 3
             or pixels_bgr.size == 0
         ):
             raise ValueError("Side-view image must be a non-empty BGR image")
+
+        height, width = pixels_bgr.shape[:2]
+        image_area = float(width * height)
+        mask = foreground_mask(pixels_bgr)
+        gray = lighting_normalize(cv2.cvtColor(pixels_bgr, cv2.COLOR_BGR2GRAY))
+        contours, _ = cv2.findContours(
+            mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+        )
+        found: list[SilhouetteCandidate] = []
+        for contour in contours:
+            area = abs(float(cv2.contourArea(contour)))
+            if area < image_area * 0.005 or area > image_area * 0.85:
+                continue
+            points = contour[:, 0, :]
+            touches = bool(
+                np.any(points[:, 0] <= 0)
+                or np.any(points[:, 1] <= 0)
+                or np.any(points[:, 0] >= width - 1)
+                or np.any(points[:, 1] >= height - 1)
+            )
+            elongation = min_area_rect_elongation(contour)
+            contrast = contour_contrast(gray, contour)
+            area_norm = min(1.0, area / max(image_area * 0.25, 1.0))
+            contrast_norm = min(1.0, contrast / 80.0)
+            elongation_norm = min(1.0, max(0.0, (elongation - 1.0) / 5.0))
+            score = 0.40 * elongation_norm + 0.30 * contrast_norm + 0.30 * area_norm
+            if touches:
+                score *= 0.7
+            found.append(
+                SilhouetteCandidate(
+                    area_px2=area,
+                    contour=contour,
+                    touches_boundary=touches,
+                    elongation=elongation,
+                    contrast=contrast,
+                    score=score,
+                )
+            )
+        found.sort(key=lambda candidate: candidate.score, reverse=True)
+        return found
+
+    def measure(
+        self,
+        pixels_bgr: np.ndarray,
+        calibration: CalibrationRecord,
+        hint_px: ImagePoint | None = None,
+    ) -> ThicknessMeasurementResult:
         if not np.isfinite(float(calibration.confidence)):
             raise ValueError("Calibration confidence must be finite")
 
-        candidates = _candidate_contours(pixels_bgr)
+        candidates = self.candidates(pixels_bgr)
         if not candidates:
             raise ValueError("No usable side-profile silhouette")
 
         selected = candidates[0]
+        if hint_px is not None:
+            selected = min(
+                candidates,
+                key=lambda candidate: _point_to_contour_distance(hint_px, candidate.contour),
+            )
+
         second_area_ratio = (
             candidates[1].area_px2 / selected.area_px2
             if len(candidates) > 1 and selected.area_px2 > 0
@@ -183,8 +204,7 @@ class ThicknessMeasurementService:
         source_points = selected.contour[:, 0, :]
         endpoint_a = source_points[endpoint_a_index]
         endpoint_b = source_points[endpoint_b_index]
-        gray = cv2.cvtColor(pixels_bgr, cv2.COLOR_BGR2GRAY)
-        contrast_delta = _contrast_delta(gray, selected.contour)
+        contrast_delta = selected.contrast
 
         confidence = max(0.0, min(1.0, float(calibration.confidence)))
         warnings: list[str] = []

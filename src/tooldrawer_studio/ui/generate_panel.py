@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from tooldrawer_studio.domain.models import Project
 from tooldrawer_studio.generation.models import GenerationValidationResult
+from tooldrawer_studio.ui.theme import mark_primary, muted_label
 
 
 class GeneratePanel(QWidget):
@@ -27,6 +28,8 @@ class GeneratePanel(QWidget):
         self._project: Project | None = None
 
         root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(10)
         form = QFormLayout()
 
         self.height_mode = QComboBox()
@@ -83,13 +86,11 @@ class GeneratePanel(QWidget):
         form.addRow(self.height_snap_label, self.height_snap)
         root.addLayout(form)
 
-        self.generate_button = QPushButton("Generate Organizer")
+        self.generate_button = mark_primary(QPushButton("Generate Organizer"))
         root.addWidget(self.generate_button)
-        self.currentness_label = QLabel("Generate: not generated")
-        self.currentness_label.setWordWrap(True)
+        self.currentness_label = muted_label("Generate: not generated")
         root.addWidget(self.currentness_label)
-        self.validation_label = QLabel("Validation: configure and review Arrange first")
-        self.validation_label.setWordWrap(True)
+        self.validation_label = muted_label("Validation: configure and review Arrange first")
         root.addWidget(self.validation_label)
         root.addStretch()
 

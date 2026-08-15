@@ -56,3 +56,27 @@ def test_polygon_area_returns_absolute_square_millimetres():
     points = [Point2D(0, 0), Point2D(10, 0), Point2D(10, 5), Point2D(0, 5)]
     assert polygon_area_mm2(points) == 50.0
     assert polygon_area_mm2(list(reversed(points))) == 50.0
+
+
+def test_simplify_closed_contour_respects_epsilon():
+    from tooldrawer_studio.geometry.contour import simplify_closed_contour
+
+    dense = [Point2D(float(x), 0.0) for x in range(11)] + [
+        Point2D(10.0, 5.0),
+        Point2D(0.0, 5.0),
+    ]
+    simplified = simplify_closed_contour(dense, 0.25)
+    assert 4 <= len(simplified) <= len(dense)
+    validate_contour(simplified)
+
+
+def test_smooth_closed_contour_does_not_exceed_epsilon():
+    from tooldrawer_studio.geometry.contour import smooth_closed_contour
+    from math import hypot
+
+    points = [Point2D(0, 0), Point2D(10, 0), Point2D(10, 5), Point2D(0, 5)]
+    smoothed = smooth_closed_contour(points, 0.25)
+    assert len(smoothed) == len(points)
+    for original, updated in zip(points, smoothed):
+        assert hypot(original.x_mm - updated.x_mm, original.y_mm - updated.y_mm) <= 0.25 + 1e-9
+    validate_contour(smoothed)

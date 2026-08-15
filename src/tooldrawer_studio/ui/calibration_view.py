@@ -1,42 +1,67 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QBrush, QColor, QMouseEvent, QPen, QPixmap, QResizeEvent
+from PySide6.QtGui import QBrush, QColor, QMouseEvent, QPen
 from PySide6.QtWidgets import (
-    QGraphicsItemGroup,
-    QGraphicsScene,
+    QGraphicsEllipseItem,
+    QGraphicsItem,
     QGraphicsSimpleTextItem,
-    QGraphicsView,
 )
 
 from tooldrawer_studio.calibration.service import PixelPoint
+from tooldrawer_studio.image_analysis import refine_corner_subpixel
+from tooldrawer_studio.ui.image_view import ZoomableImageView
 
 
-class CalibrationImageView(QGraphicsView):
+class _PointHandle(QGraphicsEllipseItem):
+    def __init__(self, view: "CalibrationImageView", index: int, point: PixelPoint) -> None:
+        radius = 6.0
+        super().__init__(-radius, -radius, radius * 2.0, radius * 2.0)
+        self._view = view
+        self.index = index
+        self.setPos(QPointF(point.x_px, point.y_px))
+        self.setZValue(20.0)
+        self.setBrush(QBrush(QColor(255, 255, 255, 220)))
+        pen = QPen(QColor(210, 30, 30))
+        pen.setWidthF(2.0)
+        self.setPen(pen)
+        self.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
+            | QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+        )
+        self._label = QGraphicsSimpleTextItem(str(index + 1), self)
+        self._label.setBrush(QBrush(QColor(210, 30, 30)))
+        self._label.setPos(radius + 2.0, -radius - 2.0)
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            point = value
+            bounds = self._view.pixmap_item.boundingRect()
+            return QPointF(
+                min(max(float(point.x()), bounds.left()), max(bounds.left(), bounds.right() - 1.0)),
+                min(max(float(point.y()), bounds.top()), max(bounds.top(), bounds.bottom() - 1.0)),
+            )
+        result = super().itemChange(change, value)
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            self._view._handle_moved(self)
+        return result
+
+
+class CalibrationImageView(ZoomableImageView):
     pointsChanged = Signal(object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._scene = QGraphicsScene(self)
-        self.setScene(self._scene)
-        self._pixmap_item = self._scene.addPixmap(QPixmap())
-        self._pixmap_item.setZValue(0.0)
-        self._overlay_group: QGraphicsItemGroup | None = None
-        self._points: list[PixelPoint] = []
+        self._handles: list[_PointHandle] = []
         self._required_points = 0
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setDragMode(QGraphicsView.DragMode.NoDrag)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._updating = False
 
     def set_image_bytes(self, raw: bytes) -> None:
-        pixmap = QPixmap()
-        if not pixmap.loadFromData(raw):
-            raise ValueError("Unsupported or invalid image data")
-        self._pixmap_item.setPixmap(pixmap)
-        self._scene.setSceneRect(QPixmap(pixmap).rect())
+        super().set_image_bytes(raw)
         self.clear_points()
-        self._fit_image()
 
     def set_required_points(self, count: int) -> None:
         if count < 0:
@@ -46,75 +71,70 @@ class CalibrationImageView(QGraphicsView):
             self.clear_points()
 
     def points_px(self) -> tuple[PixelPoint, ...]:
-        return tuple(self._points)
+        return tuple(
+            PixelPoint(float(handle.pos().x()), float(handle.pos().y()))
+            for handle in self._handles
+        )
 
-    def clear_points(self) -> None:
-        self._points.clear()
-        self._redraw_overlay()
+    def set_points(self, points: Sequence[PixelPoint]) -> None:
+        self._rebuild_handles(list(points))
         self.pointsChanged.emit(self.points_px())
 
-    def _fit_image(self) -> None:
-        pixmap = self._pixmap_item.pixmap()
-        if pixmap.isNull():
-            return
-        self.fitInView(self._pixmap_item.boundingRect(), Qt.AspectRatioMode.KeepAspectRatio)
+    def clear_points(self) -> None:
+        self._rebuild_handles([])
+        self.pointsChanged.emit(self.points_px())
 
-    def resizeEvent(self, event: QResizeEvent) -> None:
-        super().resizeEvent(event)
-        self._fit_image()
+    def _rebuild_handles(self, points: list[PixelPoint]) -> None:
+        self._updating = True
+        try:
+            for handle in self._handles:
+                if handle.scene() is self.scene():
+                    self.scene().removeItem(handle)
+            self._handles.clear()
+            for index, point in enumerate(points):
+                handle = _PointHandle(self, index, point)
+                self.scene().addItem(handle)
+                self._handles.append(handle)
+        finally:
+            self._updating = False
+
+    def _handle_moved(self, handle: _PointHandle) -> None:
+        if self._updating:
+            return
+        self.pointsChanged.emit(self.points_px())
+
+    def _refine(self, x_px: float, y_px: float) -> PixelPoint:
+        gray = self._gray
+        if gray is None:
+            return PixelPoint(x_px, y_px)
+        rx, ry = refine_corner_subpixel(gray, x_px, y_px)
+        return PixelPoint(rx, ry)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if self._begin_pan(event):
+            return
         if (
             event.button() != Qt.MouseButton.LeftButton
             or self._required_points <= 0
-            or self._pixmap_item.pixmap().isNull()
+            or self.pixmap_item.pixmap().isNull()
         ):
             super().mousePressEvent(event)
             return
 
+        item = self.itemAt(event.position().toPoint())
+        if isinstance(item, (_PointHandle, QGraphicsSimpleTextItem)):
+            super().mousePressEvent(event)
+            return
+
         scene_position = self.mapToScene(event.position().toPoint())
-        image_rect = self._pixmap_item.boundingRect()
+        image_rect = self.pixmap_item.boundingRect()
         if not image_rect.contains(scene_position):
             super().mousePressEvent(event)
             return
 
-        if len(self._points) >= self._required_points:
-            self.clear_points()
-
-        self._points.append(
-            PixelPoint(float(scene_position.x()), float(scene_position.y()))
-        )
-        self._redraw_overlay()
-        self.pointsChanged.emit(self.points_px())
+        points = list(self.points_px())
+        if len(points) >= self._required_points:
+            points = []
+        points.append(self._refine(float(scene_position.x()), float(scene_position.y())))
+        self.set_points(points)
         event.accept()
-
-    def _redraw_overlay(self) -> None:
-        if self._overlay_group is not None:
-            self._scene.removeItem(self._overlay_group)
-            self._overlay_group = None
-
-        group = QGraphicsItemGroup()
-        group.setZValue(10.0)
-        self._scene.addItem(group)
-
-        pen = QPen(QColor(210, 30, 30))
-        pen.setWidthF(2.0)
-        brush = QBrush(QColor(255, 255, 255, 220))
-        radius = 6.0
-        for index, point in enumerate(self._points, start=1):
-            marker = self._scene.addEllipse(
-                point.x_px - radius,
-                point.y_px - radius,
-                radius * 2.0,
-                radius * 2.0,
-                pen,
-                brush,
-            )
-            group.addToGroup(marker)
-            label = QGraphicsSimpleTextItem(str(index))
-            label.setBrush(QBrush(QColor(210, 30, 30)))
-            label.setPos(QPointF(point.x_px + radius + 2.0, point.y_px - radius - 2.0))
-            self._scene.addItem(label)
-            group.addToGroup(label)
-
-        self._overlay_group = group
