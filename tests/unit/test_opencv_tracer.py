@@ -11,6 +11,84 @@ from tooldrawer_studio.tracing.models import TraceConfig
 from tooldrawer_studio.tracing.opencv_tracer import OpenCVTracer
 
 
+_FOCUSED_PEN_LINE = (PixelPoint(105.0, 170.0), PixelPoint(495.0, 170.0))
+
+
+def _focused_pen_fixture(
+    pen_bgr: tuple[int, int, int],
+    *,
+    saturated_marking: bool = False,
+    include_caliper: bool = True,
+    include_shadow: bool = True,
+) -> tuple[np.ndarray, np.ndarray]:
+    pixels = np.full((360, 600, 3), 236, dtype=np.uint8)
+    pen_mask = np.zeros((360, 600), dtype=np.uint8)
+    metal = (72, 78, 82)
+    shadow = (200, 202, 204)
+
+    if include_caliper:
+        cv2.rectangle(pixels, (25, 35), (575, 65), metal, -1)
+        cv2.rectangle(pixels, (25, 35), (48, 295), metal, -1)
+        cv2.rectangle(pixels, (552, 35), (575, 295), metal, -1)
+        cv2.rectangle(pixels, (25, 275), (90, 315), metal, -1)
+        cv2.rectangle(pixels, (510, 275), (575, 315), metal, -1)
+
+    if include_shadow:
+        cv2.rectangle(pixels, (80, 145), (520, 240), shadow, -1)
+        cv2.circle(pixels, (80, 192), 47, shadow, -1)
+        cv2.circle(pixels, (520, 192), 47, shadow, -1)
+        cv2.ellipse(pixels, (300, 260), (205, 15), 0, 0, 360, shadow, -1)
+    if saturated_marking:
+        cv2.rectangle(pixels, (205, 155), (395, 183), (25, 25, 210), -1)
+
+    for target, color in ((pixels, pen_bgr), (pen_mask, 255)):
+        cv2.rectangle(target, (105, 200), (495, 230), color, -1)
+        cv2.circle(target, (105, 215), 15, color, -1)
+        cv2.ellipse(target, (495, 215), (25, 15), 0, -90, 90, color, -1)
+        cv2.rectangle(target, (145, 188), (350, 202), color, -1)
+    return pixels, pen_mask
+
+
+def _trace_focused_pen(tmp_path: Path, pixels: np.ndarray, filename: str):
+    path = tmp_path / filename
+    assert cv2.imwrite(str(path), pixels)
+    image = load_image(path, "capture-1")
+    calibration = calibrate_known_distance(
+        "capture-1", _FOCUSED_PEN_LINE[0], _FOCUSED_PEN_LINE[1], 390.0
+    )
+    candidates = OpenCVTracer().trace(
+        image,
+        calibration,
+        TraceConfig(min_area_mm2=100.0, simplify_mm=0.5),
+        focus_line_px=_FOCUSED_PEN_LINE,
+    )
+    assert candidates
+    return candidates[0]
+
+
+def _candidate_polygon_and_mask(candidate) -> tuple[Polygon, np.ndarray]:
+    validate_contour(candidate.base_contour_mm)
+    polygon = Polygon(
+        [(point.x_mm, point.y_mm) for point in candidate.base_contour_mm]
+    )
+    candidate_mask = np.zeros((360, 600), dtype=np.uint8)
+    pixel_vertices = np.asarray(
+        [
+            [round(point.x_mm + 105.0), round(point.y_mm + 170.0)]
+            for point in candidate.base_contour_mm
+        ],
+        dtype=np.int32,
+    )
+    cv2.fillPoly(candidate_mask, [pixel_vertices], 255)
+    return polygon, candidate_mask
+
+
+def _mask_iou(first: np.ndarray, second: np.ndarray) -> float:
+    intersection = int(np.count_nonzero((first != 0) & (second != 0)))
+    union = int(np.count_nonzero((first != 0) | (second != 0)))
+    return float(intersection) / float(union)
+
+
 def test_tracer_returns_two_separate_candidates(simple_tools_image_path: Path):
     image = load_image(simple_tools_image_path, "capture-1")
     calibration = calibrate_known_distance(
@@ -98,48 +176,10 @@ def test_focus_line_prefers_tool_inside_caliper_fixture(tmp_path: Path):
 
 
 def test_focus_line_returns_colored_pen_not_calibration_corridor(tmp_path: Path):
-    pixels = np.full((360, 600, 3), 236, dtype=np.uint8)
-    metal = (72, 78, 82)
-    blue = (168, 72, 24)
-    shadow = (200, 202, 204)
+    pixels, pen_mask = _focused_pen_fixture((168, 72, 24))
+    first = _trace_focused_pen(tmp_path, pixels, "blue-pen-inside-caliper.png")
+    polygon, candidate_mask = _candidate_polygon_and_mask(first)
 
-    cv2.rectangle(pixels, (25, 35), (575, 65), metal, -1)
-    cv2.rectangle(pixels, (25, 35), (48, 295), metal, -1)
-    cv2.rectangle(pixels, (552, 35), (575, 295), metal, -1)
-    cv2.rectangle(pixels, (25, 275), (90, 315), metal, -1)
-    cv2.rectangle(pixels, (510, 275), (575, 315), metal, -1)
-
-    cv2.rectangle(pixels, (80, 145), (520, 240), shadow, -1)
-    cv2.circle(pixels, (80, 192), 47, shadow, -1)
-    cv2.circle(pixels, (520, 192), 47, shadow, -1)
-    cv2.ellipse(pixels, (300, 260), (205, 15), 0, 0, 360, shadow, -1)
-
-    cv2.rectangle(pixels, (105, 200), (495, 230), blue, -1)
-    cv2.circle(pixels, (105, 215), 15, blue, -1)
-    cv2.ellipse(pixels, (495, 215), (25, 15), 0, -90, 90, blue, -1)
-    cv2.rectangle(pixels, (145, 188), (350, 202), blue, -1)
-
-    path = tmp_path / "blue-pen-inside-caliper.png"
-    assert cv2.imwrite(str(path), pixels)
-    image = load_image(path, "capture-1")
-    focus_line = (PixelPoint(105.0, 170.0), PixelPoint(495.0, 170.0))
-    calibration = calibrate_known_distance(
-        "capture-1", focus_line[0], focus_line[1], 390.0
-    )
-
-    candidates = OpenCVTracer().trace(
-        image,
-        calibration,
-        TraceConfig(min_area_mm2=100.0, simplify_mm=0.5),
-        focus_line_px=focus_line,
-    )
-
-    assert candidates
-    first = candidates[0]
-    validate_contour(first.base_contour_mm)
-    polygon = Polygon(
-        [(point.x_mm, point.y_mm) for point in first.base_contour_mm]
-    )
     assert polygon.is_valid
     assert polygon.covers(Point(195.0, 45.0))  # blue pen center
     assert not polygon.covers(Point(195.0, 0.0))  # light calibration corridor
@@ -149,6 +189,60 @@ def test_focus_line_returns_colored_pen_not_calibration_corridor(tmp_path: Path)
     assert 420.0 <= max_x - min_x <= 440.0
     assert 38.0 <= max_y - min_y <= 46.0
     assert 14_000.0 <= polygon.area <= 16_500.0
+    assert _mask_iou(candidate_mask, pen_mask) >= 0.94
+
+
+def test_focus_line_returns_washed_blue_pen_without_corridor_fallback(
+    tmp_path: Path,
+):
+    pixels, pen_mask = _focused_pen_fixture((186, 168, 158))
+
+    first = _trace_focused_pen(tmp_path, pixels, "washed-blue-pen.png")
+    polygon, candidate_mask = _candidate_polygon_and_mask(first)
+
+    assert polygon.is_valid
+    assert _mask_iou(candidate_mask, pen_mask) >= 0.94
+    assert not polygon.covers(Point(195.0, 0.0))
+
+
+def test_focus_line_ignores_saturated_caliper_marking(tmp_path: Path):
+    pixels, pen_mask = _focused_pen_fixture(
+        (168, 72, 24), saturated_marking=True
+    )
+
+    first = _trace_focused_pen(tmp_path, pixels, "marked-caliper-and-blue-pen.png")
+    polygon, candidate_mask = _candidate_polygon_and_mask(first)
+
+    assert polygon.is_valid
+    assert _mask_iou(candidate_mask, pen_mask) >= 0.94
+    assert not polygon.covers(Point(195.0, 0.0))
+
+
+def test_failed_color_segmentation_does_not_retry_corridor_seed(
+    tmp_path: Path,
+    monkeypatch,
+):
+    pixels, pen_mask = _focused_pen_fixture(
+        (168, 72, 24), include_caliper=False, include_shadow=False
+    )
+    original_grabcut = cv2.grabCut
+    call_count = 0
+
+    def fail_first_grabcut(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise cv2.error("forced color segmentation failure")
+        return original_grabcut(*args, **kwargs)
+
+    monkeypatch.setattr(cv2, "grabCut", fail_first_grabcut)
+
+    first = _trace_focused_pen(tmp_path, pixels, "failed-color-segmentation.png")
+    polygon, candidate_mask = _candidate_polygon_and_mask(first)
+
+    assert polygon.is_valid
+    assert _mask_iou(candidate_mask, pen_mask) >= 0.94
+    assert not polygon.covers(Point(195.0, 0.0))
 
 
 def test_tracer_rejects_nonpositive_configuration(simple_tools_image_path: Path):

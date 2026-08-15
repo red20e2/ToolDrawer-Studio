@@ -234,7 +234,7 @@ def _known_distance_focus_line(
 def _focus_color_mask(
     pixels_bgr: np.ndarray,
     focus_line_px: tuple[PixelPoint, PixelPoint],
-) -> np.ndarray | None:
+) -> tuple[np.ndarray | None, bool]:
     first, second = focus_line_px
     line_length = hypot(
         float(second.x_px - first.x_px),
@@ -261,14 +261,14 @@ def _focus_color_mask(
     saturation = cv2.cvtColor(pixels_bgr, cv2.COLOR_BGR2HSV)[:, :, 1]
     corridor_saturation = saturation[corridor != 0]
     if corridor_saturation.size == 0:
-        return None
+        return None, False
     otsu_threshold, _ = cv2.threshold(
         corridor_saturation.reshape(-1, 1),
         0,
         255,
         cv2.THRESH_BINARY + cv2.THRESH_OTSU,
     )
-    saturation_threshold = max(40, int(round(float(otsu_threshold))))
+    saturation_threshold = max(8, int(round(float(otsu_threshold))))
     color_seed = np.where(
         (corridor != 0) & (saturation >= saturation_threshold),
         255,
@@ -276,8 +276,57 @@ def _focus_color_mask(
     ).astype(np.uint8)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     color_seed = cv2.morphologyEx(color_seed, cv2.MORPH_OPEN, kernel)
-    if int(np.count_nonzero(color_seed)) < 20:
-        return None
+    color_pixel_count = int(np.count_nonzero(color_seed))
+    if color_pixel_count < 20:
+        return None, color_pixel_count > 0
+
+    component_count, labels, stats, _ = cv2.connectedComponentsWithStats(
+        color_seed
+    )
+    axis_x = float(second.x_px - first.x_px) / line_length
+    axis_y = float(second.y_px - first.y_px) / line_length
+    hue = cv2.cvtColor(pixels_bgr, cv2.COLOR_BGR2HSV)[:, :, 0]
+    selected_label: int | None = None
+    selected_key: tuple[float, float, float, float, int] | None = None
+    minimum_overlap = max(12.0, 0.15 * line_length)
+    for label in range(1, component_count):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < 20:
+            continue
+        ys, xs = np.nonzero(labels == label)
+        relative_x = xs.astype(np.float64) - float(first.x_px)
+        relative_y = ys.astype(np.float64) - float(first.y_px)
+        axis_positions = relative_x * axis_x + relative_y * axis_y
+        cross_positions = -relative_x * axis_y + relative_y * axis_x
+        axis_min = float(axis_positions.min())
+        axis_max = float(axis_positions.max())
+        axis_span = axis_max - axis_min
+        cross_span = float(cross_positions.max() - cross_positions.min())
+        axis_overlap = max(
+            0.0,
+            min(axis_max, line_length) - max(axis_min, 0.0),
+        )
+        elongation = axis_span / max(cross_span, 1.0)
+        hue_angles = hue[labels == label].astype(np.float64) * (np.pi / 90.0)
+        hue_coherence = hypot(
+            float(np.cos(hue_angles).mean()),
+            float(np.sin(hue_angles).mean()),
+        )
+        if (
+            axis_overlap < minimum_overlap
+            or elongation < 2.0
+            or hue_coherence < 0.75
+        ):
+            continue
+        cross_distance = abs(float(cross_positions.mean()))
+        key = (axis_overlap, axis_span, elongation, -cross_distance, area)
+        if selected_key is None or key > selected_key:
+            selected_label = label
+            selected_key = key
+    if selected_label is None:
+        return None, True
+
+    color_seed = np.where(labels == selected_label, 255, 0).astype(np.uint8)
 
     grabcut_mask = np.full((height, width), cv2.GC_BGD, dtype=np.uint8)
     grabcut_mask[corridor != 0] = cv2.GC_PR_BGD
@@ -300,7 +349,7 @@ def _focus_color_mask(
             cv2.GC_INIT_WITH_MASK,
         )
     except cv2.error:
-        return None
+        return None, True
 
     foreground = np.where(
         (grabcut_mask == cv2.GC_FGD) | (grabcut_mask == cv2.GC_PR_FGD),
@@ -308,14 +357,14 @@ def _focus_color_mask(
         0,
     ).astype(np.uint8)
     if int(np.count_nonzero(foreground)) < 20:
-        return None
+        return None, True
     foreground = cv2.morphologyEx(
         foreground, cv2.MORPH_CLOSE, kernel, iterations=1
     )
     foreground = cv2.morphologyEx(
         foreground, cv2.MORPH_OPEN, kernel, iterations=1
     )
-    return foreground
+    return foreground, True
 
 
 def _focus_line_mask(
@@ -345,9 +394,11 @@ def _focus_line_mask(
     ):
         return None
 
-    color_mask = _focus_color_mask(pixels_bgr, focus_line_px)
+    color_mask, color_attempted = _focus_color_mask(pixels_bgr, focus_line_px)
     if color_mask is not None:
         return color_mask
+    if color_attempted:
+        return None
 
     half_width = int(
         round(max(8.0, min(0.09 * line_length, 0.22 * min(width, height))))
@@ -533,6 +584,11 @@ class OpenCVTracer:
 
         focused_mask = _focus_line_mask(image.pixels_bgr, effective_focus)
         if focused_mask is None:
+            global_candidates.sort(
+                key=lambda candidate: _focus_sort_key(
+                    candidate, calibration, effective_focus
+                )
+            )
             return global_candidates
         focused_candidates = _candidates_from_mask(focused_mask, calibration, config)
         if not focused_candidates:
